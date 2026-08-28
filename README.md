@@ -62,7 +62,7 @@ The server entrypoint is intentionally thin around the agent subsystem:
 ```text
 server.py          HTTP routes, telemetry, image proxy
 agent/             model client, agent runtime, run states
-tools/             feature-specific tool implementations
+tools/             ToolSpec, ToolRegistry, schemas, built-in implementations
 agent_tools.py     compatibility facade and Qwen tool-call parser
 sandbox/           execution isolation package
 storage/           persistent storage package
@@ -70,4 +70,4 @@ skills/            reusable agent guidance
 tests/             regression and architecture contracts
 ```
 
-`agent_tools.py` remains a compatibility entrypoint while tool implementations live in `tools/`. Future registry and permission work can therefore evolve without coupling the HTTP server to individual tools.
+`agent_tools.py` remains a compatibility entrypoint while `tools/registry.py` owns registration, JSON Schema validation, standardized results, risk metadata, timing, and output limits. `AgentRuntime` receives the Registry and parsing dependencies through its constructor rather than importing the compatibility facade.

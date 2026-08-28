@@ -23,7 +23,7 @@ class AgentRuntimeBaselineTests(unittest.TestCase):
     def test_agent_executes_tool_once_then_answers(self):
         replies=['<tool_call>{"name":"calculator","arguments":{"expression":"2+2"}}</tool_call>','결과는 4입니다.']
         event={'name':'calculator','arguments':{'expression':'2+2'},'result':{'result':4},'error':None,'seconds':0.01}
-        with mock.patch.object(server,'edge_chat',side_effect=replies),mock.patch.object(agent_tools,'execute_tool',return_value=event):
+        with mock.patch.object(server,'edge_chat',side_effect=replies),mock.patch.object(server.runtime.registry,'execute',return_value=event):
             answer,events,_=server.agent_chat([{'role':'user','content':'2+2'}])
         self.assertEqual(answer,'결과는 4입니다.')
         self.assertEqual(len(events),1)

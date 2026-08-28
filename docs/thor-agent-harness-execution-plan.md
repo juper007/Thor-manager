@@ -1,7 +1,7 @@
 # Thor Agent Harness 실행 계획 및 체크리스트
 
 최종 갱신: 2026-08-28  
-전체 상태: 1단계 완료 / 2단계 시작 전
+전체 상태: 2단계 완료 / 3단계 시작 전
 설계 문서: [`thor-agent-harness-blueprint.md`](thor-agent-harness-blueprint.md)
 
 ## 상태 표기
@@ -32,7 +32,7 @@
 - [x] 정적 파일 경로 탈출 방지
 - [x] 내부 주소 및 리다이렉트 SSRF 방지
 - [x] AI 요청 동시 실행 제한
-- [x] 서버 회귀 테스트 32개 통과
+- [x] 서버 회귀 테스트 41개 통과
 - [x] Jetson Thor 배포 및 서비스 상태 확인
 - [x] GitHub `juper007/Thor-manager` 저장소 연결
 
@@ -42,7 +42,7 @@
 |---:|---|---|---|
 | 0 | 기존 기능 기준선 고정 | 완료 | 핵심 기능 자동 회귀 테스트 통과 |
 | 1 | 프로젝트 구조 분리 | 완료 | 기능 변화 없이 모듈 분리 |
-| 2 | Tool Registry 표준화 | 시작 전 | 모든 기존 도구가 Registry를 통해 실행 |
+| 2 | Tool Registry 표준화 | 완료 | 모든 기존 도구가 Registry를 통해 실행 |
 | 3 | 상태 기반 Agent Runtime | 시작 전 | 다단계 실행과 이벤트 기록 |
 | 4 | SQLite 세션 저장 | 시작 전 | 서버 재시작 후 세션 복구 |
 | 5 | Workspace와 읽기 도구 | 시작 전 | 안전한 프로젝트 분석 가능 |
@@ -116,29 +116,31 @@
 
 목적: 모든 도구에 동일한 검증, 권한, 실행 인터페이스를 적용한다.
 
+현재 상태: `[x]` 완료
+
 ### To-do
 
-- [ ] `Tool` 기본 프로토콜 정의
-- [ ] 도구 입력 JSON Schema 정의
-- [ ] 표준 성공·오류 결과 형식 정의
-- [ ] 위험 등급 필드 추가
-- [ ] 도구별 실행 시간 기록
-- [ ] 도구별 출력 크기 제한
-- [ ] Registry 등록과 검색 구현
-- [ ] `calculator` 이전
-- [ ] `current_time` 이전
-- [ ] `system_status` 이전
-- [ ] `web_search` 이전
-- [ ] `web_fetch` 이전
-- [ ] `python_execute` 이전
-- [ ] Qwen tool-call 파서와 Registry 연결
+- [x] `Tool` 기본 프로토콜 정의
+- [x] 도구 입력 JSON Schema 정의
+- [x] 표준 성공·오류 결과 형식 정의
+- [x] 위험 등급 필드 추가
+- [x] 도구별 실행 시간 기록
+- [x] 도구별 출력 크기 제한
+- [x] Registry 등록과 검색 구현
+- [x] `calculator` 이전
+- [x] `current_time` 이전
+- [x] `system_status` 이전
+- [x] `web_search` 이전
+- [x] `web_fetch` 이전 (`read_webpage` 호환 이름 유지)
+- [x] `python_execute` 이전
+- [x] Qwen tool-call 파서와 Registry 연결
 
 ### 완료 체크
 
-- [ ] 등록되지 않은 도구 호출 거부
-- [ ] 잘못된 인자 스키마 거부
-- [ ] 모든 기존 도구 테스트 통과
-- [ ] 실제 Qwen 도구 호출 검증
+- [x] 등록되지 않은 도구 호출 거부
+- [x] 잘못된 인자 스키마 거부
+- [x] 모든 기존 도구 테스트 통과
+- [x] 실제 Qwen 도구 호출 검증
 
 ---
 
@@ -398,3 +400,4 @@
 | 2026-08-28 | 0 | 기존 기능 기준선 회귀 테스트 확충 | 자동 테스트 25개, 실제 API 및 Qwen 채팅 통과 | `d9ac58b` |
 | 2026-08-28 | 1 | 모델·런타임·도구 구현을 독립 패키지로 분리 | 자동 테스트 28개, 모듈 import, 실제 API 및 Qwen 채팅 통과 | `70322b9` |
 | 2026-08-28 | 보강 | 리뷰 지적사항: DNS 재바인딩, 서비스 환경, 오류 코드, 테스트 이식성 수정 | 자동 테스트 32개, 실제 웹 검색, API 및 Qwen 채팅 통과 | `949ba93` |
+| 2026-08-28 | 2 | ToolSpec·ToolResult·JSON Schema·Registry 및 런타임 의존성 주입 구현 | 자동 테스트 41개, 실제 calculator·python_execute Qwen 호출 통과 | 커밋 후 기록 |

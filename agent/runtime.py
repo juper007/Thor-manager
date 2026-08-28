@@ -1,8 +1,6 @@
 import json
 import threading
 
-import agent_tools
-
 
 class ServiceBusy(Exception):
     pass
@@ -24,9 +22,13 @@ def validate_messages(value):
 
 
 class AgentRuntime:
-    def __init__(self,root,model_call,concurrency=1):
+    def __init__(self,root,model_call,registry,parse_calls,skill_loader,strip_tool_calls,concurrency=1):
         self.root=root
         self.model_call=model_call
+        self.registry=registry
+        self.parse_calls=parse_calls
+        self.skill_loader=skill_loader
+        self.strip_tool_calls=strip_tool_calls
         self.gate=threading.BoundedSemaphore(max(1,concurrency))
 
     def chat(self,messages):
@@ -38,11 +40,11 @@ class AgentRuntime:
             self.gate.release()
 
     def _run(self,messages):
-        conversation=[{'role':'system','content':agent_tools.load_skill_instructions(self.root)},*messages]
+        conversation=[{'role':'system','content':self.skill_loader(self.root)},*messages]
         events=[]; sources=[]; answer=''; tool_cache={}
         for _ in range(3):
             answer=self.model_call(conversation)
-            calls=agent_tools.parse_tool_calls(answer)
+            calls=self.parse_calls(answer)
             if not calls: break
             conversation.append({'role':'assistant','content':answer})
             results=[]; duplicate_count=0
@@ -51,7 +53,7 @@ class AgentRuntime:
                 if cache_key in tool_cache:
                     event=tool_cache[cache_key]; duplicate_count+=1
                 else:
-                    event=agent_tools.execute_tool(call); tool_cache[cache_key]=event; events.append(event)
+                    event=self.registry.execute(call['name'],call['arguments']); tool_cache[cache_key]=event; events.append(event)
                 results.append(event)
                 result=event.get('result') or {}
                 if call['name']=='web_search': sources.extend(result.get('results',[]))
@@ -68,5 +70,5 @@ class AgentRuntime:
         for source in sources:
             url=source.get('url','')
             if url and url not in seen: seen.add(url); unique.append(source)
-        clean=agent_tools.TOOL_CALL_RE.sub('',answer).strip()
+        clean=self.strip_tool_calls(answer)
         return clean or '도구 실행 결과를 바탕으로 답변을 만들지 못했습니다.',events,unique[:8]

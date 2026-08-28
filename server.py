@@ -5,6 +5,7 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from agent import models
 from agent.runtime import AgentRuntime,ServiceBusy,validate_messages
+import agent_tools
 
 ROOT = Path(__file__).resolve().parent
 
@@ -40,7 +41,15 @@ def image_history():
 def edge_chat(messages, max_tokens=4096):
     return models.edge_chat(messages,max_tokens=max_tokens)
 
-runtime=AgentRuntime(ROOT,lambda messages: edge_chat(messages),AI_CONCURRENCY)
+runtime=AgentRuntime(
+    ROOT,
+    lambda messages: edge_chat(messages),
+    agent_tools.DEFAULT_REGISTRY,
+    agent_tools.parse_tool_calls,
+    agent_tools.load_skill_instructions,
+    lambda text: agent_tools.TOOL_CALL_RE.sub('',text).strip(),
+    AI_CONCURRENCY,
+)
 
 
 def agent_chat(messages): return runtime.chat(messages)

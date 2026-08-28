@@ -29,6 +29,7 @@ class ModuleBoundaryTests(unittest.TestCase):
         self.assertIsInstance(server.runtime,AgentRuntime)
         self.assertNotIn('for _ in range(3)',inspect.getsource(server))
         self.assertIn('for _ in range(3)',inspect.getsource(AgentRuntime))
+        self.assertNotIn('import agent_tools',inspect.getsource(__import__('agent.runtime',fromlist=['AgentRuntime'])))
 
     def test_service_environment_file_matches_documented_example(self):
         root=Path(__file__).resolve().parents[1]
