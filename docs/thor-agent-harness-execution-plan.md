@@ -32,7 +32,7 @@
 - [x] 정적 파일 경로 탈출 방지
 - [x] 내부 주소 및 리다이렉트 SSRF 방지
 - [x] AI 요청 동시 실행 제한
-- [x] 서버 회귀 테스트 57개 통과
+- [x] 서버 회귀 테스트 61개 통과
 - [x] Jetson Thor 배포 및 서비스 상태 확인
 - [x] GitHub `juper007/Thor-manager` 저장소 연결
 
@@ -405,3 +405,4 @@
 | 2026-08-28 | 2 | ToolSpec·ToolResult·JSON Schema·Registry 및 런타임 의존성 주입 구현 | 자동 테스트 41개, 실제 calculator·python_execute Qwen 호출 통과 | `8d66810` |
 | 2026-08-28 | 2 보강 | 파서·Registry 책임 분리, timeout, 오류 코드, 불변 schema, 점진적 출력 제한 | 자동 테스트 46개, 실제 웹 검색 및 calculator Qwen 호출 통과 | `aef51fa` |
 | 2026-08-28 | 3 | 상태 머신, 구조화 이벤트, 실행 조회·취소 API, 실행 한도 구현 | 자동 테스트 57개, 실제 Qwen calculator 및 14개 실행 이벤트 확인 | `ea154de` |
+| 2026-08-28 | 3 보강 | 취소된 모델의 동시성 슬롯 보존, active run 보존, 반복 실패·완료 경쟁 수정 | 자동 테스트 61개, 실제 Qwen calculator 및 UI run_id 확인 | 미커밋 |

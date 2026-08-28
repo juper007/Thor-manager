@@ -51,7 +51,18 @@ class AgentRun:
     error:str|None=None
     events:list=field(default_factory=list)
     _cancel:threading.Event=field(default_factory=threading.Event,repr=False)
-    _lock:threading.Lock=field(default_factory=threading.Lock,repr=False)
+    _lock:threading.RLock=field(default_factory=threading.RLock,repr=False)
+    _model_done:threading.Event|None=field(default=None,repr=False)
+
+    def _transition_locked(self,new_state,reason=None):
+        if new_state not in TRANSITIONS[self.state]:
+            raise ValueError(f'invalid run transition: {self.state.value} -> {new_state.value}')
+        previous=self.state; self.state=new_state; self.updated_at=time.time()
+        payload={'from':previous.value,'to':new_state.value}
+        if reason: payload['reason']=reason
+        event=AgentEvent(len(self.events)+1,self.updated_at,'run.state',self.state.value,payload)
+        self.events.append(event)
+        return event
 
     def emit(self,event_type,payload=None):
         with self._lock:
@@ -62,17 +73,30 @@ class AgentRun:
     def transition(self,new_state,reason=None):
         if isinstance(new_state,str): new_state=RunState(new_state)
         with self._lock:
-            if new_state not in TRANSITIONS[self.state]:
-                raise ValueError(f'invalid run transition: {self.state.value} -> {new_state.value}')
-            previous=self.state; self.state=new_state; self.updated_at=time.time()
-            payload={'from':previous.value,'to':new_state.value}
-            if reason: payload['reason']=reason
-            event=AgentEvent(len(self.events)+1,self.updated_at,'run.state',self.state.value,payload)
-            self.events.append(event)
-            return event
+            return self._transition_locked(new_state,reason)
+
+    def transition_if_active(self,new_state,reason=None):
+        if isinstance(new_state,str): new_state=RunState(new_state)
+        with self._lock:
+            if self._cancel.is_set(): return None
+            return self._transition_locked(new_state,reason)
+
+    def set_iterations(self,value):
+        with self._lock: self.iterations=value; self.updated_at=time.time()
+
+    def increment_tool_calls(self):
+        with self._lock: self.tool_calls+=1; self.updated_at=time.time(); return self.tool_calls
+
+    def set_error(self,value):
+        with self._lock: self.error=value; self.updated_at=time.time()
 
     def cancel(self):
-        self._cancel.set(); self.emit('run.cancel_requested')
+        with self._lock:
+            if self.state in TERMINAL_STATES or self._cancel.is_set(): return False
+            self._cancel.set()
+            event=AgentEvent(len(self.events)+1,time.time(),'run.cancel_requested',self.state.value,{})
+            self.events.append(event); self.updated_at=event.timestamp
+            return True
 
     def is_cancelled(self): return self._cancel.is_set()
     def is_terminal(self): return self.state in TERMINAL_STATES

@@ -51,7 +51,7 @@ The suite covers tool-call parsing, agent tool execution, authentication, reques
 
 ## Agent run API
 
-`POST /api/chat` accepts an optional `run_id` containing 1–64 letters, numbers, underscores, or hyphens. The final NDJSON object includes that ID and `run_state`. Recent in-memory runs can be inspected with `GET /api/chat/runs/{run_id}` and cancelled with `POST /api/chat/cancel` using `{"run_id":"..."}`. Run state is currently memory-only; persistent recovery is planned for Stage 4.
+`POST /api/chat` accepts an optional `run_id` containing 1–64 letters, numbers, underscores, or hyphens. Clients that need cancellation should generate and send the ID before starting the request. The final NDJSON object includes that ID and `run_state`. Recent in-memory runs can be inspected with `GET /api/chat/runs/{run_id}` and cancelled with `POST /api/chat/cancel` using `{"run_id":"..."}`. Run state is currently memory-only; persistent recovery is planned for Stage 4.
 
 Run the optional live web-tool smoke test on a networked host:
 

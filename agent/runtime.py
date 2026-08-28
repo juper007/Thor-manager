@@ -55,8 +55,17 @@ class AgentRuntime:
         with self._runs_lock:
             if run_id in self._runs: raise ValueError('run_id already exists')
             run=AgentRun(run_id); run.emit('run.created'); self._runs[run_id]=run
-            while len(self._runs)>self.recent_run_limit: self._runs.popitem(last=False)
+            self._prune_runs_locked()
         return run
+
+    def _prune_runs_locked(self):
+        while len(self._runs)>self.recent_run_limit:
+            oldest_key,oldest_run=next(iter(self._runs.items()))
+            if not oldest_run.is_terminal(): break
+            del self._runs[oldest_key]
+
+    def _prune_runs(self):
+        with self._runs_lock: self._prune_runs_locked()
 
     def get_run(self,run_id):
         with self._runs_lock: return self._runs.get(run_id)
@@ -68,7 +77,7 @@ class AgentRuntime:
     def cancel(self,run_id):
         run=self.get_run(run_id)
         if run is None: return None
-        if not run.is_terminal(): run.cancel()
+        run.cancel()
         return run.snapshot()
 
     def chat(self,messages):
@@ -88,11 +97,19 @@ class AgentRuntime:
             self._terminate(run,RunState.CANCELLED,str(exc)); raise
         except Exception as exc:
             self._terminate(run,RunState.FAILED,str(exc)); raise
-        finally: self.gate.release()
+        finally:
+            model_done=run._model_done
+            if model_done is not None and not model_done.is_set():
+                threading.Thread(target=self._release_when_done,args=(model_done,),daemon=True,name=f'model-release-{run.run_id[:12]}').start()
+            else: self.gate.release()
+            self._prune_runs()
+
+    def _release_when_done(self,done):
+        done.wait(); self.gate.release(); self._prune_runs()
 
     def _terminate(self,run,state,error):
         if run.is_terminal(): return
-        run.error=error; run.transition(state,error); run.emit('run.'+state.value,{'error':error})
+        run.set_error(error); run.transition(state,error); run.emit('run.'+state.value,{'error':error})
 
     def _check_active(self,run,started):
         if run.is_cancelled(): raise RunCancelled('run cancelled by user')
@@ -102,10 +119,15 @@ class AgentRuntime:
     def _call_model(self,run,conversation,started,phase='planning'):
         self._check_active(run,started); run.emit('model.started',{'phase':phase})
         completed=queue.Queue(maxsize=1)
+        done=threading.Event(); run._model_done=done
         def invoke():
             try: completed.put((True,self.model_call(conversation)))
             except Exception as exc: completed.put((False,exc))
-        threading.Thread(target=invoke,daemon=True,name=f'model-{run.run_id[:12]}').start()
+            finally: done.set()
+        worker=threading.Thread(target=invoke,daemon=True,name=f'model-{run.run_id[:12]}')
+        try: worker.start()
+        except Exception:
+            done.set(); raise
         while True:
             self._check_active(run,started)
             remaining=self.total_timeout-(time.monotonic()-started)
@@ -114,12 +136,17 @@ class AgentRuntime:
             if not succeeded: raise value
             run.emit('model.completed',{'phase':phase,'characters':len(value)}); return value
 
+    def _require_final_answer(self,answer,phase):
+        if self.parse_calls(answer):
+            raise RunLimitError(f'{phase} produced another tool call')
+        return answer
+
     def _run(self,run,messages,started):
         conversation=[{'role':'system','content':self.skill_loader(self.root)},*messages]
         events=[]; sources=[]; answer=''; tool_cache={}
         run.transition(RunState.PLANNING)
         for iteration in range(1,self.max_iterations+1):
-            self._check_active(run,started); run.iterations=iteration
+            self._check_active(run,started); run.set_iterations(iteration)
             answer=self._call_model(run,conversation,started)
             calls=self.parse_calls(answer)
             if not calls: break
@@ -135,7 +162,7 @@ class AgentRuntime:
                 if cache_key in tool_cache:
                     event=tool_cache[cache_key]; duplicate_count+=1; run.emit('tool.reused',{'name':call['name']})
                 else:
-                    run.tool_calls+=1; run.emit('tool.started',{'name':call['name'],'arguments':call['arguments']})
+                    run.increment_tool_calls(); run.emit('tool.started',{'name':call['name'],'arguments':call['arguments']})
                     event=self.registry.execute(call['name'],call['arguments'])
                     tool_cache[cache_key]=event; events.append(event)
                     run.emit('tool.completed',{'name':call['name'],'status':event.get('status'),'error_code':event.get('error_code'),'seconds':event.get('seconds')})
@@ -149,16 +176,18 @@ class AgentRuntime:
             if duplicate_count==len(calls):
                 conversation.append({'role':'user','content':'The identical tool call already completed. Respond with the final answer now, using the exact returned values. Do not emit JSON, tool calls, or invoke tags.'})
                 run.transition(RunState.PLANNING,'duplicate tool call detected')
-                answer=self._call_model(run,conversation,started,'duplicate_recovery'); break
+                answer=self._require_final_answer(self._call_model(run,conversation,started,'duplicate_recovery'),'duplicate recovery'); break
             run.transition(RunState.PLANNING)
         else:
             conversation.append({'role':'user','content':'Tool limit reached. Answer now using the available results without another tool call.'})
-            answer=self._call_model(run,conversation,started,'limit_recovery')
-        self._check_active(run,started); run.transition(RunState.VERIFYING)
+            answer=self._require_final_answer(self._call_model(run,conversation,started,'limit_recovery'),'iteration-limit recovery')
+        self._check_active(run,started)
+        if run.transition_if_active(RunState.VERIFYING) is None: raise RunCancelled('run cancelled by user')
         unique=[]; seen=set()
         for source in sources:
             url=source.get('url','')
             if url and url not in seen: seen.add(url); unique.append(source)
         clean=self.strip_tool_calls(answer); final=clean or '도구 실행 결과를 바탕으로 답변을 만들지 못했습니다.'
-        run.transition(RunState.COMPLETED); run.emit('run.completed',{'answer_characters':len(final),'tools_executed':len(events)})
+        if run.transition_if_active(RunState.COMPLETED) is None: raise RunCancelled('run cancelled by user')
+        run.emit('run.completed',{'answer_characters':len(final),'tools_executed':len(events)})
         return final,events,unique[:8]

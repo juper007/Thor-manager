@@ -2,7 +2,7 @@ import threading
 import time
 import unittest
 
-from agent.runtime import AgentRuntime,RunCancelled,RunLimitError,RunTimeout,validate_run_id
+from agent.runtime import AgentRuntime,RunCancelled,RunLimitError,RunTimeout,ServiceBusy,validate_run_id
 from agent.state import AgentRun,RunState
 
 
@@ -98,6 +98,48 @@ class AgentStateTests(unittest.TestCase):
         runtime.run_chat([{'role':'user','content':'a'}],'a')
         runtime.run_chat([{'role':'user','content':'b'}],'b')
         self.assertIsNone(runtime.get_run('a')); self.assertIsNotNone(runtime.get_run('b'))
+
+    def test_active_run_is_not_evicted(self):
+        runtime=make_runtime([],recent_run_limit=1)
+        active=runtime.create_run('active')
+        completed=runtime.create_run('newer')
+        completed.transition(RunState.PLANNING); completed.transition(RunState.VERIFYING); completed.transition(RunState.COMPLETED)
+        runtime._prune_runs()
+        self.assertIs(runtime.get_run('active'),active)
+        self.assertIsNotNone(runtime.get_run('newer'))
+
+    def test_cancelled_model_holds_concurrency_until_worker_finishes(self):
+        entered=threading.Event(); release=threading.Event(); caught=[]
+        runtime=make_runtime([])
+        def model(_): entered.set(); release.wait(2); return 'late'
+        runtime.model_call=model
+        thread=threading.Thread(target=lambda:self._capture(runtime,caught,'first'))
+        thread.start(); self.assertTrue(entered.wait(1)); runtime.cancel('first'); thread.join(1)
+        with self.assertRaises(ServiceBusy): runtime.run_chat([{'role':'user','content':'next'}],'second')
+        release.set(); deadline=time.time()+1; acquired=False
+        while time.time()<deadline and not acquired:
+            acquired=runtime.gate.acquire(blocking=False)
+            if not acquired: time.sleep(.01)
+        self.assertTrue(acquired,'AI capacity was not released after model worker exited')
+        if acquired: runtime.gate.release()
+        self.assertIsInstance(caught[0],RunCancelled)
+
+    def _capture(self,runtime,caught,run_id):
+        try: runtime.run_chat([{'role':'user','content':'go'}],run_id)
+        except Exception as exc: caught.append(exc)
+
+    def test_recovery_tool_call_is_reported_as_failure(self):
+        runtime=make_runtime(['tool:x','tool:x','tool:x'])
+        with self.assertRaises(RunLimitError): runtime.run_chat([{'role':'user','content':'go'}],'looping')
+        self.assertEqual(runtime.get_run('looping').state,RunState.FAILED)
+
+    def test_cancel_wins_before_terminal_transition(self):
+        runtime=make_runtime(['answer']); original=runtime.strip_tool_calls
+        def cancel_during_verify(answer):
+            runtime.cancel('finish-race'); return original(answer)
+        runtime.strip_tool_calls=cancel_during_verify
+        with self.assertRaises(RunCancelled): runtime.run_chat([{'role':'user','content':'go'}],'finish-race')
+        self.assertEqual(runtime.get_run('finish-race').state,RunState.CANCELLED)
 
 
 if __name__=='__main__': unittest.main()

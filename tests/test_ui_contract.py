@@ -26,6 +26,7 @@ class UIContractTests(unittest.TestCase):
     def test_chat_uses_rendered_markdown(self):
         self.assertIn('ai.innerHTML=markdownToHtml(full)',self.script)
         self.assertIn("d.textContent=text",self.script)
+        self.assertIn('run_id:runId',self.script)
 
     def test_image_studio_contract(self):
         for marker in ('data-image-mode="generate"','data-image-mode="edit"','id="sourceImage"','id="generateImage"','id="imageOutput"'):
