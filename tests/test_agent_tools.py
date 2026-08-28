@@ -4,6 +4,7 @@ from unittest import mock
 
 import agent_tools
 import server
+from tools import web as web_tools
 
 
 class ToolCallParsingTests(unittest.TestCase):
@@ -34,7 +35,7 @@ class ToolCallParsingTests(unittest.TestCase):
 
 class SecurityTests(unittest.TestCase):
     def test_private_web_target_is_blocked(self):
-        with mock.patch('agent_tools.socket.getaddrinfo',return_value=[(2,1,6,'',('127.0.0.1',80))]):
+        with mock.patch('tools.web.socket.getaddrinfo',return_value=[(2,1,6,'',('127.0.0.1',80))]):
             with self.assertRaises(ValueError):
                 agent_tools._public_url('http://example.test/private')
 
@@ -44,7 +45,7 @@ class SecurityTests(unittest.TestCase):
         def addresses(host,*_args,**_kwargs):
             address='127.0.0.1' if host=='private.test' else '93.184.216.34'
             return [(2,1,6,'',(address,80))]
-        with mock.patch('agent_tools.urllib.request.build_opener',return_value=opener),mock.patch('agent_tools.socket.getaddrinfo',side_effect=addresses):
+        with mock.patch('tools.web.urllib.request.build_opener',return_value=opener),mock.patch('tools.web.socket.getaddrinfo',side_effect=addresses):
             with self.assertRaises(ValueError):
                 agent_tools._request('http://public.test/start')
 

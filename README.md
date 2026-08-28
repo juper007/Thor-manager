@@ -32,3 +32,20 @@ python3 -m unittest discover -s tests -v
 ```
 
 The suite covers tool-call parsing, agent tool execution, authentication, request limits, path traversal protection, image proxy history, and the AI Workspace UI contract.
+
+## Architecture
+
+The server entrypoint is intentionally thin around the agent subsystem:
+
+```text
+server.py          HTTP routes, telemetry, image proxy
+agent/             model client, agent runtime, run states
+tools/             feature-specific tool implementations
+agent_tools.py     compatibility facade and Qwen tool-call parser
+sandbox/           execution isolation package
+storage/           persistent storage package
+skills/            reusable agent guidance
+tests/             regression and architecture contracts
+```
+
+`agent_tools.py` remains a compatibility entrypoint while tool implementations live in `tools/`. Future registry and permission work can therefore evolve without coupling the HTTP server to individual tools.

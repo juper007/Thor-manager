@@ -4,6 +4,7 @@ from unittest import mock
 
 import agent_tools
 import server
+from tools import python as python_tool
 
 
 class AgentRuntimeBaselineTests(unittest.TestCase):
@@ -18,18 +19,18 @@ class AgentRuntimeBaselineTests(unittest.TestCase):
     def test_python_execute_success_and_error_contract(self):
         success=subprocess.CompletedProcess([],0,'4\n','')
         failure=subprocess.CompletedProcess([],1,'','ValueError: bad\n')
-        with mock.patch.object(agent_tools.subprocess,'run',return_value=success):
+        with mock.patch.object(python_tool.subprocess,'run',return_value=success):
             result=agent_tools.python_execute({'code':'print(2+2)'})
         self.assertEqual(result['return_code'],0)
         self.assertEqual(result['stdout'],'4\n')
-        with mock.patch.object(agent_tools.subprocess,'run',return_value=failure):
+        with mock.patch.object(python_tool.subprocess,'run',return_value=failure):
             result=agent_tools.python_execute({'code':'raise ValueError("bad")'})
         self.assertEqual(result['return_code'],1)
         self.assertIn('ValueError',result['stderr'])
 
     def test_python_execute_timeout_contract(self):
         timeout=subprocess.TimeoutExpired(['docker'],30)
-        with mock.patch.object(agent_tools.subprocess,'run',side_effect=[timeout,subprocess.CompletedProcess([],0,'','')]):
+        with mock.patch.object(python_tool.subprocess,'run',side_effect=[timeout,subprocess.CompletedProcess([],0,'','')]):
             result=agent_tools.python_execute({'code':'while True: pass'})
         self.assertEqual(result['return_code'],124)
         self.assertIn('timed out',result['stderr'])
