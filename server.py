@@ -5,6 +5,7 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from agent import models
 from agent.runtime import AgentRuntime,RunCancelled,RunLimitError,ServiceBusy,validate_messages,validate_run_id
+from storage import SessionStore
 import agent_tools
 
 ROOT = Path(__file__).resolve().parent
@@ -23,6 +24,10 @@ GENERATED_DIR = ROOT / 'generated'
 GENERATED_DIR.mkdir(exist_ok=True)
 image_history_lock = threading.Lock()
 AI_CONCURRENCY = positive_int_env('THOR_AI_CONCURRENCY',1)
+SESSION_DB = Path(os.environ.get('THOR_SESSION_DB',str(ROOT/'data'/'sessions.db')))
+session_store = SessionStore(SESSION_DB)
+session_store.recover_interrupted()
+session_store.cleanup(positive_int_env('THOR_SESSION_MAX_AGE_DAYS',30),positive_int_env('THOR_SESSION_KEEP_RECENT',100))
 
 def image_api_key():
     key = os.environ.get('THOR_IMAGE_API_KEY', '')
@@ -49,12 +54,18 @@ runtime=AgentRuntime(
     agent_tools.load_skill_instructions,
     lambda text: agent_tools.TOOL_CALL_RE.sub('',text).strip(),
     AI_CONCURRENCY,
+    session_store=session_store,
 )
 
 
 def agent_chat(messages): return runtime.chat(messages)
 
 def agent_run_chat(messages,run_id=None): return runtime.run_chat(messages,run_id)
+
+def json_response(handler,status,value):
+    body=json.dumps(value,ensure_ascii=False).encode()
+    handler.send_response(status); handler.send_header('Content-Type','application/json; charset=utf-8')
+    handler.send_header('Content-Length',str(len(body))); handler.end_headers(); handler.wfile.write(body)
 
 def read_text(path, default=""):
     try: return Path(path).read_text().strip()
@@ -161,11 +172,26 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_error(404); return
         if route == '/api/chat/models':
             body=b'[{"name":"engine-64k","size":0,"context_length":64000}]'; self.send_response(200); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body); return
+        if route == '/api/chat/sessions':
+            query=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            try: rows=session_store.list_sessions(query.get('limit',['50'])[0],query.get('offset',['0'])[0])
+            except ValueError: self.send_error(400); return
+            json_response(self,200,{'sessions':rows}); return
+        if route.startswith('/api/chat/sessions/'):
+            run_id=urllib.parse.unquote(route.rsplit('/',1)[-1])
+            try: run_id=validate_run_id(run_id)
+            except ValueError: self.send_error(400); return
+            session=session_store.get_session(run_id)
+            if session is None: self.send_error(404); return
+            json_response(self,200,session); return
         if route.startswith('/api/chat/runs/'):
             run_id=urllib.parse.unquote(route.rsplit('/',1)[-1])
             try: run_id=validate_run_id(run_id)
             except ValueError: self.send_error(400); return
             snapshot=runtime.run_snapshot(run_id)
+            if snapshot is None:
+                stored=session_store.get_session(run_id)
+                if stored is not None: snapshot={key:stored[key] for key in ('run_id','state','created_at','updated_at','iterations','tool_calls','error')}; snapshot['events']=stored['events']
             if snapshot is None: self.send_error(404); return
             body=json.dumps(snapshot,ensure_ascii=False).encode(); self.send_response(200); self.send_header('Content-Type','application/json'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body); return
         if route == '/ai':
@@ -188,6 +214,22 @@ class Handler(SimpleHTTPRequestHandler):
                 body=json.dumps(snapshot,ensure_ascii=False).encode(); self.send_response(200); self.send_header('Content-Type','application/json'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
             except ValueError as e:
                 body=json.dumps({'error':str(e)}).encode(); self.send_response(400); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body)
+            return
+        if route.startswith('/api/chat/sessions/') and route.endswith('/resume'):
+            run_id=urllib.parse.unquote(route.split('/')[-2])
+            try:
+                run_id=validate_run_id(run_id); incoming=self.read_json_body(4096)
+                new_run_id=validate_run_id(incoming.get('run_id'))
+                messages=validate_messages(session_store.resumable_messages(run_id))
+                run,content,events,sources=runtime.run_chat(messages,new_run_id,resumed_from=run_id)
+                public_events=[{'name':e['name'],'arguments':e['arguments'],'seconds':e['seconds'],'error':e['error']} for e in events]
+                json_response(self,200,{'run_id':run.run_id,'resumed_from':run_id,'run_state':run.state.value,'message':{'role':'assistant','content':content},'tools_used':public_events,'sources':sources,'done':True})
+            except KeyError: self.send_error(404)
+            except ValueError as e: json_response(self,400,{'error':str(e),'done':True})
+            except ServiceBusy as e: json_response(self,429,{'error':str(e),'done':True})
+            except RunCancelled as e: json_response(self,409,{'error':str(e),'done':True})
+            except RunLimitError as e: json_response(self,408,{'error':str(e),'done':True})
+            except Exception as e: json_response(self,502,{'error':str(e),'done':True})
             return
         if route != '/api/chat': self.send_error(404); return
         try:

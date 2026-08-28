@@ -20,3 +20,6 @@ qwen-image/*-headers.txt
 Thumbs.db
 .idea/
 .vscode/
+data/
+*.db-wal
+*.db-shm

@@ -53,6 +53,10 @@ class AgentRun:
     _cancel:threading.Event=field(default_factory=threading.Event,repr=False)
     _lock:threading.RLock=field(default_factory=threading.RLock,repr=False)
     _model_done:threading.Event|None=field(default=None,repr=False)
+    _on_change:object|None=field(default=None,repr=False)
+
+    def _notify_locked(self):
+        if self._on_change is not None: self._on_change(self.snapshot())
 
     def _transition_locked(self,new_state,reason=None):
         if new_state not in TRANSITIONS[self.state]:
@@ -62,12 +66,14 @@ class AgentRun:
         if reason: payload['reason']=reason
         event=AgentEvent(len(self.events)+1,self.updated_at,'run.state',self.state.value,payload)
         self.events.append(event)
+        self._notify_locked()
         return event
 
     def emit(self,event_type,payload=None):
         with self._lock:
             event=AgentEvent(len(self.events)+1,time.time(),event_type,self.state.value,payload or {})
             self.events.append(event); self.updated_at=event.timestamp
+            self._notify_locked()
             return event
 
     def transition(self,new_state,reason=None):
@@ -82,13 +88,13 @@ class AgentRun:
             return self._transition_locked(new_state,reason)
 
     def set_iterations(self,value):
-        with self._lock: self.iterations=value; self.updated_at=time.time()
+        with self._lock: self.iterations=value; self.updated_at=time.time(); self._notify_locked()
 
     def increment_tool_calls(self):
-        with self._lock: self.tool_calls+=1; self.updated_at=time.time(); return self.tool_calls
+        with self._lock: self.tool_calls+=1; self.updated_at=time.time(); self._notify_locked(); return self.tool_calls
 
     def set_error(self,value):
-        with self._lock: self.error=value; self.updated_at=time.time()
+        with self._lock: self.error=value; self.updated_at=time.time(); self._notify_locked()
 
     def cancel(self):
         with self._lock:
@@ -96,6 +102,7 @@ class AgentRun:
             self._cancel.set()
             event=AgentEvent(len(self.events)+1,time.time(),'run.cancel_requested',self.state.value,{})
             self.events.append(event); self.updated_at=event.timestamp
+            self._notify_locked()
             return True
 
     def is_cancelled(self): return self._cancel.is_set()

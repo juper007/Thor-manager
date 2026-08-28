@@ -27,6 +27,9 @@ Edit `thor-monitor.env` before installing the service. The included `thor-monito
 THOR_MONITOR_PASSWORD=replace-with-a-strong-password
 THOR_IMAGE_API_KEY=replace-with-the-image-api-key
 THOR_AI_CONCURRENCY=1
+THOR_SESSION_DB=/home/juper007/thor-monitor/data/sessions.db
+THOR_SESSION_MAX_AGE_DAYS=30
+THOR_SESSION_KEEP_RECENT=100
 ```
 
 Install or update the unit only after the environment file exists:
@@ -51,7 +54,17 @@ The suite covers tool-call parsing, agent tool execution, authentication, reques
 
 ## Agent run API
 
-`POST /api/chat` accepts an optional `run_id` containing 1–64 letters, numbers, underscores, or hyphens. Clients that need cancellation should generate and send the ID before starting the request. The final NDJSON object includes that ID and `run_state`. Recent in-memory runs can be inspected with `GET /api/chat/runs/{run_id}` and cancelled with `POST /api/chat/cancel` using `{"run_id":"..."}`. Run state is currently memory-only; persistent recovery is planned for Stage 4.
+`POST /api/chat` accepts an optional `run_id` containing 1–64 letters, numbers, underscores, or hyphens. Clients that need cancellation should generate and send the ID before starting the request. The final NDJSON object includes that ID and `run_state`. Runs can be inspected with `GET /api/chat/runs/{run_id}` and cancelled with `POST /api/chat/cancel` using `{"run_id":"..."}`.
+
+Run state, messages, events, and tool results are persisted in SQLite. The default database is `data/sessions.db`; override it with `THOR_SESSION_DB`. At startup, interrupted sessions are marked failed with a restart reason so they can be inspected or resumed safely.
+
+```text
+GET  /api/chat/sessions?limit=50&offset=0
+GET  /api/chat/sessions/{run_id}
+POST /api/chat/sessions/{run_id}/resume   {"run_id":"optional-new-run-id"}
+```
+
+Only failed or cancelled sessions can be resumed. Retention defaults to 30 days while preserving the 100 most recently updated sessions. Credential-like fields and inline secrets are redacted before storage.
 
 Run the optional live web-tool smoke test on a networked host:
 

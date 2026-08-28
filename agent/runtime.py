@@ -42,11 +42,12 @@ def validate_messages(value):
 
 class AgentRuntime:
     def __init__(self,root,model_call,registry,parse_calls,skill_loader,strip_tool_calls,concurrency=1,
-                 max_iterations=3,max_tool_calls=8,total_timeout=900,recent_run_limit=100):
+                 max_iterations=3,max_tool_calls=8,total_timeout=900,recent_run_limit=100,session_store=None):
         self.root=root; self.model_call=model_call; self.registry=registry; self.parse_calls=parse_calls
         self.skill_loader=skill_loader; self.strip_tool_calls=strip_tool_calls
         self.max_iterations=max(1,max_iterations); self.max_tool_calls=max(1,max_tool_calls)
         self.total_timeout=max(.01,total_timeout); self.recent_run_limit=max(1,recent_run_limit)
+        self.session_store=session_store
         self.gate=threading.BoundedSemaphore(max(1,concurrency))
         self._runs=OrderedDict(); self._runs_lock=threading.Lock()
 
@@ -84,14 +85,18 @@ class AgentRuntime:
         _,answer,events,sources=self.run_chat(messages)
         return answer,events,sources
 
-    def run_chat(self,messages,run_id=None):
+    def run_chat(self,messages,run_id=None,resumed_from=None):
         run=self.create_run(run_id)
+        if self.session_store is not None:
+            self.session_store.create_session(run.snapshot(),messages,resumed_from=resumed_from)
+            run._on_change=lambda snapshot: None if snapshot['state']==RunState.COMPLETED.value else self.session_store.save_snapshot(snapshot)
         if not self.gate.acquire(blocking=False):
             self._terminate(run,RunState.FAILED,'AI service is busy')
             raise ServiceBusy('AI service is busy; try again after the current request finishes')
         started=time.monotonic()
         try:
             answer,events,sources=self._run(run,messages,started)
+            if self.session_store is not None: self.session_store.complete_session(run.snapshot(),answer)
             return run,answer,events,sources
         except RunCancelled as exc:
             self._terminate(run,RunState.CANCELLED,str(exc)); raise
@@ -165,6 +170,7 @@ class AgentRuntime:
                     run.increment_tool_calls(); run.emit('tool.started',{'name':call['name'],'arguments':call['arguments']})
                     event=self.registry.execute(call['name'],call['arguments'])
                     tool_cache[cache_key]=event; events.append(event)
+                    if self.session_store is not None: self.session_store.record_tool_execution(run.run_id,len(events),event)
                     run.emit('tool.completed',{'name':call['name'],'status':event.get('status'),'error_code':event.get('error_code'),'seconds':event.get('seconds')})
                 results.append(event)
                 result=event.get('result') or {}

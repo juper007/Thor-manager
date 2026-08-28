@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 import server
+from storage import SessionStore
 
 
 class RunningServer:
@@ -105,6 +106,28 @@ class HandlerIntegrationTests(unittest.TestCase):
         with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),RunningServer() as app:
             status,_,payload=app.request('POST','/api/chat/cancel',body,headers)
         self.assertEqual(status,400); self.assertIn('required',json.loads(payload)['error'])
+
+    def test_persisted_session_list_and_detail_endpoints(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store=SessionStore(Path(directory)/'sessions.db'); now=1.0
+            store.create_session({'run_id':'stored','state':'failed','created_at':now,'updated_at':now,'iterations':1,'tool_calls':0,'error':'stopped','events':[]},[{'role':'user','content':'hello'}])
+            with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),mock.patch.object(server,'session_store',store),RunningServer() as app:
+                list_status,_,list_body=app.request('GET','/api/chat/sessions',headers={'Authorization':basic()})
+                get_status,_,get_body=app.request('GET','/api/chat/sessions/stored',headers={'Authorization':basic()})
+        self.assertEqual((list_status,get_status),(200,200))
+        self.assertEqual(json.loads(list_body)['sessions'][0]['run_id'],'stored')
+        self.assertEqual(json.loads(get_body)['messages'][0]['content'],'hello')
+
+    def test_failed_session_can_be_resumed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store=SessionStore(Path(directory)/'sessions.db'); now=1.0
+            store.create_session({'run_id':'failed-run','state':'failed','created_at':now,'updated_at':now,'iterations':1,'tool_calls':0,'error':'stopped','events':[]},[{'role':'user','content':'retry'}])
+            resumed=mock.Mock(run_id='new-run',state=mock.Mock(value='completed'))
+            body=json.dumps({'run_id':'new-run'}).encode(); headers={'Authorization':basic(),'Content-Type':'application/json','Content-Length':str(len(body))}
+            with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),mock.patch.object(server,'session_store',store),mock.patch.object(server.runtime,'run_chat',return_value=(resumed,'done',[],[])) as call,RunningServer() as app:
+                status,_,payload=app.request('POST','/api/chat/sessions/failed-run/resume',body,headers)
+        self.assertEqual(status,200); self.assertEqual(json.loads(payload)['resumed_from'],'failed-run')
+        call.assert_called_once_with([{'role':'user','content':'retry'}],'new-run',resumed_from='failed-run')
 
     def test_static_path_traversal_returns_404(self):
         with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),RunningServer() as app:

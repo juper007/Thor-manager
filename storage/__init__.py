@@ -1,1 +1,5 @@
-"""Persistent storage package. SQLite support is introduced in stage 4."""
+"""Persistent SQLite session storage."""
+
+from storage.database import SessionStore
+
+__all__=['SessionStore']
