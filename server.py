@@ -7,6 +7,13 @@ from agent import models
 from agent.runtime import AgentRuntime,ServiceBusy,validate_messages
 
 ROOT = Path(__file__).resolve().parent
+
+
+def positive_int_env(name,default):
+    try: return max(1,int(os.environ.get(name,str(default))))
+    except ValueError: return default
+
+
 state = {"timestamp": 0, "cpu": 0, "gpu": 0, "memory": {}, "temps": {}, "power": {}, "clocks": [], "raw": ""}
 history = deque(maxlen=300)
 lock = threading.Lock()
@@ -14,7 +21,7 @@ IMAGE_API = 'http://127.0.0.1:8188'
 GENERATED_DIR = ROOT / 'generated'
 GENERATED_DIR.mkdir(exist_ok=True)
 image_history_lock = threading.Lock()
-AI_CONCURRENCY = max(1, int(os.environ.get('THOR_AI_CONCURRENCY', '1')))
+AI_CONCURRENCY = positive_int_env('THOR_AI_CONCURRENCY',1)
 
 def image_api_key():
     key = os.environ.get('THOR_IMAGE_API_KEY', '')
@@ -162,6 +169,8 @@ class Handler(SimpleHTTPRequestHandler):
             public_events=[{'name':e['name'],'arguments':e['arguments'],'seconds':e['seconds'],'error':e['error']} for e in events]
             body=(json.dumps({'message':{'role':'assistant','content':content},'tools_used':public_events,'sources':sources,'done':True},ensure_ascii=False)+'\n').encode()
             self.send_response(200); self.send_header('Content-Type','application/x-ndjson; charset=utf-8'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
+        except ValueError as e:
+            body=json.dumps({'error':str(e),'done':True}).encode(); self.send_response(400); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body)
         except ServiceBusy as e:
             body=json.dumps({'error':str(e),'done':True}).encode(); self.send_response(429); self.send_header('Content-Type','application/json'); self.send_header('Retry-After','5'); self.end_headers(); self.wfile.write(body)
         except urllib.error.HTTPError as e:

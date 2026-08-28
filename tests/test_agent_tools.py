@@ -1,10 +1,8 @@
 import unittest
-import urllib.error
 from unittest import mock
 
 import agent_tools
 import server
-from tools import web as web_tools
 
 
 class ToolCallParsingTests(unittest.TestCase):
@@ -40,14 +38,23 @@ class SecurityTests(unittest.TestCase):
                 agent_tools._public_url('http://example.test/private')
 
     def test_redirect_target_is_revalidated(self):
-        error=urllib.error.HTTPError('http://public.test',302,'Found',{'Location':'http://private.test/secret'},None)
-        opener=mock.Mock(); opener.open.side_effect=error
+        response=mock.Mock(status=302,headers={'Location':'http://private.test/secret'})
         def addresses(host,*_args,**_kwargs):
             address='127.0.0.1' if host=='private.test' else '93.184.216.34'
             return [(2,1,6,'',(address,80))]
-        with mock.patch('tools.web.urllib.request.build_opener',return_value=opener),mock.patch('tools.web.socket.getaddrinfo',side_effect=addresses):
+        with mock.patch('tools.web._open_pinned',return_value=response),mock.patch('tools.web.socket.getaddrinfo',side_effect=addresses):
             with self.assertRaises(ValueError):
                 agent_tools._request('http://public.test/start')
+        response.close.assert_called_once()
+
+    def test_request_connects_to_the_validated_address(self):
+        response=mock.Mock(status=200)
+        response.headers.get_content_type.return_value='text/plain'
+        response.read.return_value=b'ok'
+        resolved=[(2,1,6,'',('93.184.216.34',80))]
+        with mock.patch('tools.web.socket.getaddrinfo',return_value=resolved),mock.patch('tools.web._open_pinned',return_value=response) as opened:
+            self.assertEqual(agent_tools._request('http://public.test/'),('text/plain',b'ok'))
+        self.assertEqual(opened.call_args.args[1],['93.184.216.34'])
 
     def test_static_path_cannot_escape_root(self):
         translated=server.Handler.translate_path(None,'/../../etc/passwd')

@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 User=juper007
 WorkingDirectory=/home/juper007/thor-monitor
-EnvironmentFile=/etc/thor-monitor.env
+EnvironmentFile=/home/juper007/thor-monitor/thor-monitor.env
 Environment=THOR_MONITOR_PORT=8090
 ExecStart=/usr/bin/python3 /home/juper007/thor-monitor/server.py
 Restart=always

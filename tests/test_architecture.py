@@ -1,5 +1,6 @@
 import inspect
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import agent_tools
@@ -28,6 +29,12 @@ class ModuleBoundaryTests(unittest.TestCase):
         self.assertIsInstance(server.runtime,AgentRuntime)
         self.assertNotIn('for _ in range(3)',inspect.getsource(server))
         self.assertIn('for _ in range(3)',inspect.getsource(AgentRuntime))
+
+    def test_service_environment_file_matches_documented_example(self):
+        root=Path(__file__).resolve().parents[1]
+        unit=(root/'thor-monitor.service').read_text(encoding='utf-8')
+        self.assertIn('EnvironmentFile=/home/juper007/thor-monitor/thor-monitor.env',unit)
+        self.assertTrue((root/'thor-monitor.env.example').is_file())
 
 
 if __name__=='__main__':

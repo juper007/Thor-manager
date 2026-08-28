@@ -1,10 +1,9 @@
 import html
+import http.client
 import ipaddress
 import re
 import socket
-import urllib.error
 import urllib.parse
-import urllib.request
 import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 
@@ -23,33 +22,69 @@ class TextParser(HTMLParser):
         if not self.skip: self.parts.append(data)
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self,req,fp,code,msg,headers,newurl): return None
-
-
-def public_url(url):
+def _public_target(url):
     parsed=urllib.parse.urlsplit(url)
     if parsed.scheme not in ('http','https') or not parsed.hostname: raise ValueError('only public http(s) URLs are allowed')
+    addresses=[]
     for item in socket.getaddrinfo(parsed.hostname,parsed.port or (443 if parsed.scheme=='https' else 80),type=socket.SOCK_STREAM):
         ip=ipaddress.ip_address(item[4][0])
         if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
             raise ValueError('private or reserved network targets are blocked')
+        if str(ip) not in addresses: addresses.append(str(ip))
+    if not addresses: raise ValueError('URL hostname did not resolve')
+    return parsed,addresses
+
+
+def public_url(url):
+    _public_target(url)
     return url
 
 
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    def __init__(self,host,address,port,timeout):
+        super().__init__(host,port=port,timeout=timeout); self.address=address
+    def connect(self):
+        self.sock=socket.create_connection((self.address,self.port),self.timeout,self.source_address)
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self,host,address,port,timeout):
+        super().__init__(host,port=port,timeout=timeout); self.address=address
+    def connect(self):
+        self.sock=socket.create_connection((self.address,self.port),self.timeout,self.source_address)
+        self.sock=self._context.wrap_socket(self.sock,server_hostname=self.host)
+
+
+def _open_pinned(parsed,addresses,timeout=20):
+    port=parsed.port or (443 if parsed.scheme=='https' else 80)
+    path=urllib.parse.urlunsplit(('', '', parsed.path or '/',parsed.query,''))
+    host=parsed.hostname if parsed.port is None else f'{parsed.hostname}:{parsed.port}'
+    last_error=None
+    for address in addresses:
+        connection=(_PinnedHTTPSConnection if parsed.scheme=='https' else _PinnedHTTPConnection)(parsed.hostname,address,port,timeout)
+        try:
+            connection.request('GET',path,headers={'Host':host,'User-Agent':USER_AGENT,'Accept':'text/html,application/json,text/plain','Connection':'close'})
+            return connection.getresponse()
+        except OSError as exc:
+            last_error=exc; connection.close()
+    raise last_error or OSError('unable to connect to validated target')
+
+
 def request(url,limit=800_000):
-    opener=urllib.request.build_opener(_NoRedirect); current=url
+    current=url
     for _ in range(6):
-        current=public_url(current)
-        req=urllib.request.Request(current,headers={'User-Agent':USER_AGENT,'Accept':'text/html,application/json,text/plain'})
-        try: response=opener.open(req,timeout=20)
-        except urllib.error.HTTPError as exc:
-            if exc.code not in (301,302,303,307,308): raise
-            location=exc.headers.get('Location')
-            if not location: raise ValueError('redirect response has no Location header')
-            current=urllib.parse.urljoin(current,location); continue
-        with response:
-            return response.headers.get_content_type(),response.read(limit+1)[:limit]
+        parsed,addresses=_public_target(current)
+        response=_open_pinned(parsed,addresses)
+        try:
+            if response.status in (301,302,303,307,308):
+                location=response.headers.get('Location')
+                if not location: raise ValueError('redirect response has no Location header')
+                current=urllib.parse.urljoin(current,location); continue
+            if response.status>=400: raise ValueError(f'web request failed with HTTP {response.status}')
+            content_type=response.headers.get_content_type()
+            return content_type,response.read(limit+1)[:limit]
+        finally:
+            response.close()
     raise ValueError('too many redirects')
 
 

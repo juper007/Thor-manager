@@ -1,10 +1,22 @@
 import subprocess
+import shutil
 import unittest
 from unittest import mock
 
 import agent_tools
 import server
 from tools import python as python_tool
+
+
+SANDBOX_IMAGE='nvcr.io/nvidia/pytorch:26.05-py3'
+
+
+def docker_sandbox_available():
+    if not shutil.which('docker'): return False
+    try:
+        return subprocess.run(['docker','image','inspect',SANDBOX_IMAGE],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10).returncode==0
+    except (OSError,subprocess.SubprocessError):
+        return False
 
 
 class AgentRuntimeBaselineTests(unittest.TestCase):
@@ -35,6 +47,14 @@ class AgentRuntimeBaselineTests(unittest.TestCase):
         self.assertEqual(result['return_code'],124)
         self.assertIn('timed out',result['stderr'])
 
+    def test_python_timeout_survives_cleanup_failure(self):
+        timeout=subprocess.TimeoutExpired(['docker'],30)
+        cleanup_timeout=subprocess.TimeoutExpired(['docker','rm'],10)
+        with mock.patch.object(python_tool.subprocess,'run',side_effect=[timeout,cleanup_timeout]):
+            result=agent_tools.python_execute({'code':'while True: pass'})
+        self.assertEqual(result['return_code'],124)
+
+    @unittest.skipUnless(docker_sandbox_available(),'Docker sandbox image is not available')
     def test_python_execute_real_sandbox(self):
         result=agent_tools.python_execute({'code':'print(sum(range(101)))'})
         self.assertEqual(result['return_code'],0,result['stderr'])

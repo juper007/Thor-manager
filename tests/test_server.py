@@ -71,8 +71,12 @@ class HandlerIntegrationTests(unittest.TestCase):
         headers={'Authorization':basic(),'Content-Type':'application/json','Content-Length':str(len(body))}
         with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),RunningServer() as app:
             status,_,payload=app.request('POST','/api/chat',body,headers)
-        self.assertEqual(status,502)
+        self.assertEqual(status,400)
         self.assertIn('valid role',json.loads(payload)['error'])
+
+    def test_invalid_concurrency_setting_uses_default(self):
+        with mock.patch.dict(os.environ,{'THOR_AI_CONCURRENCY':'invalid'},clear=True):
+            self.assertEqual(server.positive_int_env('THOR_AI_CONCURRENCY',1),1)
 
     def test_busy_chat_returns_429(self):
         body=json.dumps({'messages':[{'role':'user','content':'hello'}]}).encode()
