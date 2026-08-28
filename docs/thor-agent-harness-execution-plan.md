@@ -400,4 +400,4 @@
 | 2026-08-28 | 0 | 기존 기능 기준선 회귀 테스트 확충 | 자동 테스트 25개, 실제 API 및 Qwen 채팅 통과 | `d9ac58b` |
 | 2026-08-28 | 1 | 모델·런타임·도구 구현을 독립 패키지로 분리 | 자동 테스트 28개, 모듈 import, 실제 API 및 Qwen 채팅 통과 | `70322b9` |
 | 2026-08-28 | 보강 | 리뷰 지적사항: DNS 재바인딩, 서비스 환경, 오류 코드, 테스트 이식성 수정 | 자동 테스트 32개, 실제 웹 검색, API 및 Qwen 채팅 통과 | `949ba93` |
-| 2026-08-28 | 2 | ToolSpec·ToolResult·JSON Schema·Registry 및 런타임 의존성 주입 구현 | 자동 테스트 41개, 실제 calculator·python_execute Qwen 호출 통과 | 커밋 후 기록 |
+| 2026-08-28 | 2 | ToolSpec·ToolResult·JSON Schema·Registry 및 런타임 의존성 주입 구현 | 자동 테스트 41개, 실제 calculator·python_execute Qwen 호출 통과 | `8d66810` |
