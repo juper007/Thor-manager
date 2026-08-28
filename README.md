@@ -49,6 +49,10 @@ python3 -m unittest discover -s tests -v
 
 The suite covers tool-call parsing, agent tool execution, authentication, request limits, path traversal protection, image proxy history, and the AI Workspace UI contract. The real Code Interpreter integration test is skipped automatically when Docker or its prebuilt sandbox image is unavailable.
 
+## Agent run API
+
+`POST /api/chat` accepts an optional `run_id` containing 1–64 letters, numbers, underscores, or hyphens. The final NDJSON object includes that ID and `run_state`. Recent in-memory runs can be inspected with `GET /api/chat/runs/{run_id}` and cancelled with `POST /api/chat/cancel` using `{"run_id":"..."}`. Run state is currently memory-only; persistent recovery is planned for Stage 4.
+
 Run the optional live web-tool smoke test on a networked host:
 
 ```bash
@@ -70,4 +74,4 @@ skills/            reusable agent guidance
 tests/             regression and architecture contracts
 ```
 
-`agent_tools.py` remains a compatibility entrypoint while `tools/registry.py` owns registration, JSON Schema validation, standardized error codes, risk metadata, timeouts, timing, and incremental output limits. Registered schemas are immutable copies. `AgentRuntime` receives the Registry and parsing dependencies through its constructor rather than importing the compatibility facade.
+`agent_tools.py` remains a compatibility entrypoint while `tools/registry.py` owns registration, JSON Schema validation, standardized error codes, risk metadata, timeouts, timing, and incremental output limits. Registered schemas are immutable copies. `AgentRuntime` receives the Registry and parsing dependencies through its constructor rather than importing the compatibility facade. It tracks bounded recent runs through explicit states and structured events, with cancellation and iteration, tool-call, and wall-clock limits.

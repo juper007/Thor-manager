@@ -1,0 +1,103 @@
+import threading
+import time
+import unittest
+
+from agent.runtime import AgentRuntime,RunCancelled,RunLimitError,RunTimeout,validate_run_id
+from agent.state import AgentRun,RunState
+
+
+class FakeRegistry:
+    def __init__(self): self.calls=[]
+    def execute(self,name,arguments):
+        self.calls.append((name,arguments))
+        return {'name':name,'arguments':arguments,'status':'success','result':{'value':len(self.calls)},'error':None,'error_code':None,'seconds':0}
+
+
+def parser(text):
+    if not text.startswith('tool:'): return []
+    return [{'name':'fake','arguments':{'value':text[5:]}}]
+
+
+def make_runtime(replies,**limits):
+    iterator=iter(replies)
+    return AgentRuntime('.',lambda _:next(iterator),FakeRegistry(),parser,lambda _:'skill',lambda text:text,**limits)
+
+
+class AgentStateTests(unittest.TestCase):
+    def test_transition_events_and_invalid_transition(self):
+        run=AgentRun('one'); run.emit('run.created'); run.transition(RunState.PLANNING)
+        self.assertEqual(run.snapshot()['events'][-1]['payload']['to'],'planning')
+        with self.assertRaises(ValueError): run.transition(RunState.COMPLETED)
+
+    def test_simple_run_completes_with_events(self):
+        runtime=make_runtime(['answer'])
+        run,answer,events,_=runtime.run_chat([{'role':'user','content':'hello'}],'simple')
+        self.assertEqual((answer,events),('answer',[])); self.assertEqual(run.state,RunState.COMPLETED)
+        types=[event['type'] for event in run.snapshot()['events']]
+        self.assertIn('model.started',types); self.assertIn('run.completed',types)
+
+    def test_tool_run_records_execution_and_prevents_duplicate(self):
+        runtime=make_runtime(['tool:x','tool:x','final'])
+        run,answer,events,_=runtime.run_chat([{'role':'user','content':'go'}],'tools')
+        self.assertEqual(answer,'final'); self.assertEqual(len(events),1); self.assertEqual(run.tool_calls,1)
+        self.assertIn('tool.reused',[event['type'] for event in run.snapshot()['events']])
+
+    def test_multiple_tools_run_sequentially(self):
+        runtime=make_runtime(['tool:a','tool:b','done'])
+        run,answer,events,_=runtime.run_chat([{'role':'user','content':'go'}],'sequential')
+        self.assertEqual(answer,'done'); self.assertEqual(run.tool_calls,2)
+        self.assertEqual([event['arguments']['value'] for event in events],['a','b'])
+
+    def test_cancel_during_tool_prevents_the_next_tool(self):
+        entered=threading.Event(); release=threading.Event(); caught=[]
+        runtime=make_runtime(['ignored'])
+        runtime.parse_calls=lambda _:[{'name':'first','arguments':{}},{'name':'second','arguments':{}}]
+        def execute(name,arguments):
+            runtime.registry.calls.append((name,arguments))
+            if name=='first': entered.set(); release.wait(2)
+            return {'name':name,'arguments':arguments,'status':'success','result':{},'error':None,'error_code':None,'seconds':0}
+        runtime.registry.execute=execute
+        def run():
+            try: runtime.run_chat([{'role':'user','content':'go'}],'cancel-tool')
+            except Exception as exc: caught.append(exc)
+        thread=threading.Thread(target=run); thread.start(); self.assertTrue(entered.wait(1))
+        runtime.cancel('cancel-tool'); release.set(); thread.join(1)
+        self.assertEqual([name for name,_ in runtime.registry.calls],['first'])
+        self.assertIsInstance(caught[0],RunCancelled)
+        self.assertEqual(runtime.get_run('cancel-tool').state,RunState.CANCELLED)
+
+    def test_tool_call_limit_fails_run(self):
+        runtime=make_runtime(['tool:x'],max_tool_calls=1)
+        runtime.parse_calls=lambda _:[{'name':'fake','arguments':{'value':'1'}},{'name':'fake','arguments':{'value':'2'}}]
+        with self.assertRaises(RunLimitError): runtime.run_chat([{'role':'user','content':'go'}],'limited')
+        self.assertEqual(runtime.get_run('limited').state,RunState.FAILED)
+
+    def test_total_timeout_fails_run(self):
+        runtime=make_runtime([],total_timeout=.05)
+        runtime.model_call=lambda _:time.sleep(1)
+        with self.assertRaises(RunTimeout): runtime.run_chat([{'role':'user','content':'go'}],'timeout')
+        self.assertEqual(runtime.get_run('timeout').state,RunState.FAILED)
+
+    def test_cancellation_stops_waiting_for_model(self):
+        started=threading.Event(); release=threading.Event(); caught=[]
+        runtime=make_runtime([])
+        def model(_): started.set(); release.wait(2); return 'late'
+        runtime.model_call=model
+        def run():
+            try: runtime.run_chat([{'role':'user','content':'go'}],'cancel-me')
+            except Exception as exc: caught.append(exc)
+        thread=threading.Thread(target=run); thread.start(); self.assertTrue(started.wait(1))
+        snapshot=runtime.cancel('cancel-me'); thread.join(1); release.set()
+        self.assertFalse(thread.is_alive()); self.assertIsInstance(caught[0],RunCancelled)
+        self.assertEqual(runtime.get_run('cancel-me').state,RunState.CANCELLED)
+        self.assertEqual(snapshot['run_id'],'cancel-me')
+
+    def test_run_id_validation_and_recent_run_bound(self):
+        with self.assertRaises(ValueError): validate_run_id('../bad')
+        runtime=make_runtime(['a','b'],recent_run_limit=1)
+        runtime.run_chat([{'role':'user','content':'a'}],'a')
+        runtime.run_chat([{'role':'user','content':'b'}],'b')
+        self.assertIsNone(runtime.get_run('a')); self.assertIsNotNone(runtime.get_run('b'))
+
+
+if __name__=='__main__': unittest.main()

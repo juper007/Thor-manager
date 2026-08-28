@@ -57,12 +57,15 @@ class HandlerIntegrationTests(unittest.TestCase):
         response=('테스트 답변',[{'name':'calculator','arguments':{'expression':'2+2'},'seconds':0.01,'error':None}],[])
         body=json.dumps({'messages':[{'role':'user','content':'2+2'}]}).encode()
         headers={'Authorization':basic(),'Content-Type':'application/json','Content-Length':str(len(body))}
-        with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),mock.patch.object(server,'agent_chat',return_value=response),RunningServer() as app:
+        run=mock.Mock(run_id='test-run',state=mock.Mock(value='completed'))
+        with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),mock.patch.object(server,'agent_run_chat',return_value=(run,*response)),RunningServer() as app:
             status,result_headers,payload=app.request('POST','/api/chat',body,headers)
         result=json.loads(payload)
         self.assertEqual(status,200)
         self.assertTrue(result['done'])
         self.assertEqual(result['message']['content'],'테스트 답변')
+        self.assertEqual(result['run_id'],'test-run')
+        self.assertEqual(result['run_state'],'completed')
         self.assertEqual(result['tools_used'][0]['name'],'calculator')
         self.assertIn('application/x-ndjson',result_headers['Content-Type'])
 
@@ -81,10 +84,27 @@ class HandlerIntegrationTests(unittest.TestCase):
     def test_busy_chat_returns_429(self):
         body=json.dumps({'messages':[{'role':'user','content':'hello'}]}).encode()
         headers={'Authorization':basic(),'Content-Type':'application/json','Content-Length':str(len(body))}
-        with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),mock.patch.object(server,'agent_chat',side_effect=server.ServiceBusy('busy')),RunningServer() as app:
+        with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),mock.patch.object(server,'agent_run_chat',side_effect=server.ServiceBusy('busy')),RunningServer() as app:
             status,result_headers,_=app.request('POST','/api/chat',body,headers)
         self.assertEqual(status,429)
         self.assertEqual(result_headers.get('Retry-After'),'5')
+
+    def test_run_status_and_cancel_endpoints(self):
+        run=server.runtime.create_run('api-run')
+        headers={'Authorization':basic(),'Content-Type':'application/json'}
+        cancel_body=json.dumps({'run_id':'api-run'}).encode(); headers['Content-Length']=str(len(cancel_body))
+        with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),RunningServer() as app:
+            status,_,payload=app.request('POST','/api/chat/cancel',cancel_body,headers)
+            get_status,_,get_payload=app.request('GET','/api/chat/runs/api-run',headers={'Authorization':basic()})
+        self.assertEqual(status,200); self.assertEqual(json.loads(payload)['run_id'],'api-run')
+        self.assertEqual(get_status,200); self.assertTrue(json.loads(get_payload)['events'])
+        with server.runtime._runs_lock: server.runtime._runs.pop(run.run_id,None)
+
+    def test_cancel_requires_run_id(self):
+        body=b'{}'; headers={'Authorization':basic(),'Content-Type':'application/json','Content-Length':str(len(body))}
+        with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),RunningServer() as app:
+            status,_,payload=app.request('POST','/api/chat/cancel',body,headers)
+        self.assertEqual(status,400); self.assertIn('required',json.loads(payload)['error'])
 
     def test_static_path_traversal_returns_404(self):
         with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),RunningServer() as app:

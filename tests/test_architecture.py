@@ -28,7 +28,7 @@ class ModuleBoundaryTests(unittest.TestCase):
     def test_agent_loop_is_not_implemented_in_server(self):
         self.assertIsInstance(server.runtime,AgentRuntime)
         self.assertNotIn('for _ in range(3)',inspect.getsource(server))
-        self.assertIn('for _ in range(3)',inspect.getsource(AgentRuntime))
+        self.assertIn('self.max_iterations',inspect.getsource(AgentRuntime))
         self.assertNotIn('import agent_tools',inspect.getsource(__import__('agent.runtime',fromlist=['AgentRuntime'])))
 
     def test_service_environment_file_matches_documented_example(self):

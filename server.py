@@ -4,7 +4,7 @@ from collections import deque
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from agent import models
-from agent.runtime import AgentRuntime,ServiceBusy,validate_messages
+from agent.runtime import AgentRuntime,RunCancelled,RunLimitError,ServiceBusy,validate_messages,validate_run_id
 import agent_tools
 
 ROOT = Path(__file__).resolve().parent
@@ -53,6 +53,8 @@ runtime=AgentRuntime(
 
 
 def agent_chat(messages): return runtime.chat(messages)
+
+def agent_run_chat(messages,run_id=None): return runtime.run_chat(messages,run_id)
 
 def read_text(path, default=""):
     try: return Path(path).read_text().strip()
@@ -159,6 +161,13 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_error(404); return
         if route == '/api/chat/models':
             body=b'[{"name":"engine-64k","size":0,"context_length":64000}]'; self.send_response(200); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body); return
+        if route.startswith('/api/chat/runs/'):
+            run_id=urllib.parse.unquote(route.rsplit('/',1)[-1])
+            try: run_id=validate_run_id(run_id)
+            except ValueError: self.send_error(400); return
+            snapshot=runtime.run_snapshot(run_id)
+            if snapshot is None: self.send_error(404); return
+            body=json.dumps(snapshot,ensure_ascii=False).encode(); self.send_response(200); self.send_header('Content-Type','application/json'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body); return
         if route == '/ai':
             html=(ROOT/'ai-workspace.html').read_text(encoding='utf-8')
             body=html.encode(); self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body); return
@@ -169,23 +178,44 @@ class Handler(SimpleHTTPRequestHandler):
         route=self.path.split('?',1)[0]
         if route in ('/api/images/generations','/api/images/edits'):
             return self.proxy_image(route)
+        if route == '/api/chat/cancel':
+            try:
+                incoming=self.read_json_body(4096)
+                if 'run_id' not in incoming: raise ValueError('run_id is required')
+                run_id=validate_run_id(incoming['run_id'])
+                snapshot=runtime.cancel(run_id)
+                if snapshot is None: self.send_error(404); return
+                body=json.dumps(snapshot,ensure_ascii=False).encode(); self.send_response(200); self.send_header('Content-Type','application/json'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
+            except ValueError as e:
+                body=json.dumps({'error':str(e)}).encode(); self.send_response(400); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body)
+            return
         if route != '/api/chat': self.send_error(404); return
         try:
-            length=int(self.headers.get('Content-Length','0'))
-            if length <= 0 or length > 2_000_000: raise ValueError('invalid request size')
-            incoming=json.loads(self.rfile.read(length))
-            content,events,sources=agent_chat(validate_messages(incoming.get('messages')))
+            incoming=self.read_json_body(2_000_000)
+            requested_run_id=validate_run_id(incoming.get('run_id'))
+            run,content,events,sources=agent_run_chat(validate_messages(incoming.get('messages')),requested_run_id)
             public_events=[{'name':e['name'],'arguments':e['arguments'],'seconds':e['seconds'],'error':e['error']} for e in events]
-            body=(json.dumps({'message':{'role':'assistant','content':content},'tools_used':public_events,'sources':sources,'done':True},ensure_ascii=False)+'\n').encode()
+            body=(json.dumps({'run_id':run.run_id,'run_state':run.state.value,'message':{'role':'assistant','content':content},'tools_used':public_events,'sources':sources,'done':True},ensure_ascii=False)+'\n').encode()
             self.send_response(200); self.send_header('Content-Type','application/x-ndjson; charset=utf-8'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
         except ValueError as e:
             body=json.dumps({'error':str(e),'done':True}).encode(); self.send_response(400); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body)
         except ServiceBusy as e:
             body=json.dumps({'error':str(e),'done':True}).encode(); self.send_response(429); self.send_header('Content-Type','application/json'); self.send_header('Retry-After','5'); self.end_headers(); self.wfile.write(body)
+        except RunCancelled as e:
+            body=json.dumps({'error':str(e),'done':True}).encode(); self.send_response(409); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body)
+        except RunLimitError as e:
+            body=json.dumps({'error':str(e),'done':True}).encode(); self.send_response(408); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body)
         except urllib.error.HTTPError as e:
             detail=e.read().decode(errors='replace')[:1000]; body=json.dumps({'error':detail,'done':True}).encode(); self.send_response(502); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body)
         except Exception as e:
             body=json.dumps({'error':str(e),'done':True}).encode(); self.send_response(502); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body)
+    def read_json_body(self,max_bytes):
+        length=int(self.headers.get('Content-Length','0'))
+        if length <= 0 or length > max_bytes: raise ValueError('invalid request size')
+        try: value=json.loads(self.rfile.read(length))
+        except json.JSONDecodeError: raise ValueError('request body must be valid JSON')
+        if not isinstance(value,dict): raise ValueError('request body must be a JSON object')
+        return value
     def proxy_image(self, route):
         try:
             length=int(self.headers.get('Content-Length','0'))
