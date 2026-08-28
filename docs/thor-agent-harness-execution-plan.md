@@ -401,4 +401,4 @@
 | 2026-08-28 | 1 | 모델·런타임·도구 구현을 독립 패키지로 분리 | 자동 테스트 28개, 모듈 import, 실제 API 및 Qwen 채팅 통과 | `70322b9` |
 | 2026-08-28 | 보강 | 리뷰 지적사항: DNS 재바인딩, 서비스 환경, 오류 코드, 테스트 이식성 수정 | 자동 테스트 32개, 실제 웹 검색, API 및 Qwen 채팅 통과 | `949ba93` |
 | 2026-08-28 | 2 | ToolSpec·ToolResult·JSON Schema·Registry 및 런타임 의존성 주입 구현 | 자동 테스트 41개, 실제 calculator·python_execute Qwen 호출 통과 | `8d66810` |
-| 2026-08-28 | 2 보강 | 파서·Registry 책임 분리, timeout, 오류 코드, 불변 schema, 점진적 출력 제한 | 자동 테스트 46개, 실제 웹 검색 및 calculator Qwen 호출 통과 | 커밋 후 기록 |
+| 2026-08-28 | 2 보강 | 파서·Registry 책임 분리, timeout, 오류 코드, 불변 schema, 점진적 출력 제한 | 자동 테스트 46개, 실제 웹 검색 및 calculator Qwen 호출 통과 | `aef51fa` |
