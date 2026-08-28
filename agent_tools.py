@@ -12,6 +12,7 @@ import subprocess
 import time
 import urllib.parse
 import urllib.request
+import urllib.error
 import xml.etree.ElementTree as ET
 import uuid
 from datetime import datetime
@@ -50,11 +51,29 @@ class TextParser(HTMLParser):
         if not self.skip: self.parts.append(data)
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def _request(url, limit=800_000):
-    req=urllib.request.Request(url,headers={'User-Agent':USER_AGENT,'Accept':'text/html,application/json,text/plain'})
-    with urllib.request.urlopen(req,timeout=20) as response:
-        content_type=response.headers.get_content_type()
-        return content_type,response.read(limit+1)[:limit]
+    opener=urllib.request.build_opener(_NoRedirect)
+    current=url
+    for _ in range(6):
+        current=_public_url(current)
+        req=urllib.request.Request(current,headers={'User-Agent':USER_AGENT,'Accept':'text/html,application/json,text/plain'})
+        try:
+            response=opener.open(req,timeout=20)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in (301,302,303,307,308): raise
+            location=exc.headers.get('Location')
+            if not location: raise ValueError('redirect response has no Location header')
+            current=urllib.parse.urljoin(current,location)
+            continue
+        with response:
+            content_type=response.headers.get_content_type()
+            return content_type,response.read(limit+1)[:limit]
+    raise ValueError('too many redirects')
 
 
 def _public_url(url):

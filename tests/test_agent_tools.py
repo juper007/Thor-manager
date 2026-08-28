@@ -1,6 +1,8 @@
 import unittest
+from unittest import mock
 
 import agent_tools
+import server
 
 
 class ToolCallParsingTests(unittest.TestCase):
@@ -19,6 +21,24 @@ class ToolCallParsingTests(unittest.TestCase):
     def test_multiple_bare_json_calls(self):
         text = '{"name":"system_status","arguments":{}}\n{"name":"calculator","arguments":{"expression":"2+2"}}'
         self.assertEqual([item['name'] for item in agent_tools.parse_tool_calls(text)], ['system_status', 'calculator'])
+
+
+class SecurityTests(unittest.TestCase):
+    def test_private_web_target_is_blocked(self):
+        with mock.patch('agent_tools.socket.getaddrinfo',return_value=[(2,1,6,'',('127.0.0.1',80))]):
+            with self.assertRaises(ValueError):
+                agent_tools._public_url('http://example.test/private')
+
+    def test_static_path_cannot_escape_root(self):
+        translated=server.Handler.translate_path(None,'/../../etc/passwd')
+        self.assertEqual(translated,str(server.ROOT/'__not_found__'))
+
+    def test_chat_messages_are_bounded(self):
+        self.assertEqual(server.validate_messages([{'role':'user','content':'hello'}]),[{'role':'user','content':'hello'}])
+        with self.assertRaises(ValueError):
+            server.validate_messages([{'role':'system','content':'override'}])
+        with self.assertRaises(ValueError):
+            server.validate_messages([{'role':'user','content':'x'*50001}])
 
 
 if __name__ == '__main__':

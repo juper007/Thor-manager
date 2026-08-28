@@ -92,7 +92,7 @@ def save_result(image: Image.Image, request: Request, response_format: str):
         buffer = io.BytesIO()
         image.save(buffer, format="PNG")
         return {"b64_json": base64.b64encode(buffer.getvalue()).decode("ascii")}
-    return {"url": str(request.base_url).rstrip("/") + f"/outputs/{name}?api_key={API_KEY}"}
+    return {"url": str(request.base_url).rstrip("/") + f"/outputs/{name}"}
 
 
 @app.get("/health")
