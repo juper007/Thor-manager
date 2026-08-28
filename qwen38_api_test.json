@@ -1,0 +1,8 @@
+{
+  "model": "engine",
+  "messages": [
+    {"role": "user", "content": "한 문장으로 현재 서버 상태를 알려줘."}
+  ],
+  "temperature": 0,
+  "max_tokens": 64
+}

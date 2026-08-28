@@ -1,0 +1,20 @@
+.tool-summary{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
+.tool-summary span{display:inline-flex;align-items:center;border:1px solid #31401f;background:#15200f;color:var(--green);border-radius:999px;padding:5px 8px;font:700 8px monospace;letter-spacing:.7px}
+.source-list{display:grid;gap:5px;margin-top:10px;padding:10px;background:#0b1013;border:1px solid var(--line);border-radius:3px}
+.source-list b{color:var(--muted);font:700 8px monospace;letter-spacing:1.3px}
+.source-list a{color:var(--cyan);font:10px monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-decoration:none}
+.source-list a:hover{text-decoration:underline}
+.skill-list{display:grid;gap:7px;padding:14px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.skill-list .label{margin-bottom:4px}
+.skill-list span{color:#8d989e;font:700 8px monospace;letter-spacing:.8px}
+.bubble.ai p{margin:0 0 9px}.bubble.ai p:last-child{margin-bottom:0}
+.bubble.ai h2,.bubble.ai h3,.bubble.ai h4,.bubble.ai h5{margin:14px 0 7px;color:#f5f8f9;line-height:1.3}
+.bubble.ai h2{font-size:19px}.bubble.ai h3{font-size:16px}.bubble.ai h4,.bubble.ai h5{font-size:14px}
+.bubble.ai ul,.bubble.ai ol{margin:7px 0 11px;padding-left:23px}.bubble.ai li{margin:4px 0}
+.bubble.ai strong{color:#fff}.bubble.ai em{color:#b9c3c8}
+.bubble.ai code{background:#080c0e;border:1px solid var(--line);border-radius:3px;padding:2px 5px;color:#b8e986;font:12px Consolas,monospace}
+.bubble.ai pre{overflow:auto;margin:11px 0;padding:13px;background:#080c0e;border:1px solid var(--line);border-left:2px solid var(--green);border-radius:3px;white-space:pre}
+.bubble.ai pre code{border:0;padding:0;background:none;color:#d8e0e3}
+.bubble.ai blockquote{margin:10px 0;padding:8px 12px;border-left:2px solid var(--cyan);background:#0c1215;color:#aab5ba}
+.bubble.ai a{color:var(--cyan);text-decoration:none}.bubble.ai a:hover{text-decoration:underline}
+.md-table-wrap{overflow-x:auto;margin:11px 0}.bubble.ai table{width:100%;border-collapse:collapse;font-size:12px}.bubble.ai th,.bubble.ai td{padding:8px 10px;border:1px solid var(--line);text-align:left}.bubble.ai th{background:#10181c;color:var(--green);font:700 9px monospace;letter-spacing:.7px}.bubble.ai td{background:#0b1013}

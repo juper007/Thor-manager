@@ -1,0 +1,20 @@
+[Unit]
+Description=Qwen3.8 27B NVFP4 TensorRT Edge-LLM OpenAI API
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=juper007
+Group=juper007
+WorkingDirectory=/home/juper007/TensorRT-Edge-LLM
+Environment=PYTHONPATH=/home/juper007/TensorRT-Edge-LLM/build/pybind
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/juper007/.venvs/edgellm-build/bin/python -m experimental.server --model /home/juper007/edgellm-models/qwen38-27b-nvfp4/engine-64k --host 0.0.0.0 --port 8080
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,22 @@
+.codex-deps/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local credentials and environment files
+thor-password.txt
+*.env
+!.env.example
+!*.env.example
+
+# Generated model outputs and test artifacts
+qwen-image/outputs/
+qwen-image/models/
+qwen-image/*.png
+qwen-image/*-headers.txt
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,18 @@
+[Unit]
+Description=Qwen Image Generation and Editing API
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/docker rm -f qwen-image-api
+ExecStart=/usr/bin/docker run --name qwen-image-api --runtime=nvidia --network=host --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 --env-file /home/juper007/qwen-image/qwen-image.env -v /home/juper007/qwen-image/models:/models -v /home/juper007/qwen-image/outputs:/outputs qwen-image-api:thor
+ExecStop=/usr/bin/docker stop -t 30 qwen-image-api
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=0
+TimeoutStopSec=45
+
+[Install]
+WantedBy=multi-user.target
