@@ -28,6 +28,21 @@ class AgentRuntimeBaselineTests(unittest.TestCase):
         self.assertEqual(answer,'결과는 4입니다.')
         self.assertEqual(len(events),1)
 
+    def test_unknown_tool_error_is_returned_to_model(self):
+        replies=['{"name":"missing_tool","arguments":{}}','도구 이름이 잘못되었습니다.']
+        with mock.patch.object(server,'edge_chat',side_effect=replies):
+            answer,events,_=server.agent_chat([{'role':'user','content':'use missing tool'}])
+        self.assertEqual(answer,'도구 이름이 잘못되었습니다.')
+        self.assertEqual(events[0]['error_code'],'validation_error')
+        self.assertIn('unknown tool',events[0]['error'])
+
+    def test_invalid_arguments_error_is_returned_to_model(self):
+        replies=['{"name":"calculator","arguments":"2+2"}','인자 형식이 잘못되었습니다.']
+        with mock.patch.object(server,'edge_chat',side_effect=replies):
+            answer,events,_=server.agent_chat([{'role':'user','content':'calculate'}])
+        self.assertEqual(answer,'인자 형식이 잘못되었습니다.')
+        self.assertEqual(events[0]['error_code'],'validation_error')
+
     def test_python_execute_success_and_error_contract(self):
         success=subprocess.CompletedProcess([],0,'4\n','')
         failure=subprocess.CompletedProcess([],1,'','ValueError: bad\n')

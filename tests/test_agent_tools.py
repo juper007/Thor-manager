@@ -10,9 +10,13 @@ class ToolCallParsingTests(unittest.TestCase):
         text='<tool_call>{"name":"calculator","arguments":{"expression":"6*7"}}</tool_call>'
         self.assertEqual(agent_tools.parse_tool_calls(text),[{'name':'calculator','arguments':{'expression':'6*7'}}])
 
-    def test_unknown_tool_is_ignored(self):
+    def test_unknown_tool_is_preserved_for_registry_validation(self):
         text='{"name":"delete_everything","arguments":{}}'
-        self.assertEqual(agent_tools.parse_tool_calls(text),[])
+        self.assertEqual(agent_tools.parse_tool_calls(text),[{'name':'delete_everything','arguments':{}}])
+
+    def test_non_object_arguments_are_preserved_for_registry_validation(self):
+        text='{"name":"calculator","arguments":"2+2"}'
+        self.assertEqual(agent_tools.parse_tool_calls(text),[{'name':'calculator','arguments':'2+2'}])
 
     def test_qwen_markdown_escaped_invoke(self):
         text = r'''{"name":"python\_execute","arguments":{"code":"print(2 \*\* 3)"})\</invoke>'''

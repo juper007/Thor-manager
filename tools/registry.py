@@ -1,6 +1,8 @@
+import queue
+import threading
 import time
 
-from tools.base import ToolResult,ToolSpec,ToolValidationError,limit_output,validate_schema
+from tools.base import ToolResult,ToolSpec,ToolTimeoutError,ToolValidationError,limit_output,thaw,validate_schema
 
 
 class ToolRegistry:
@@ -22,22 +24,37 @@ class ToolRegistry:
 
     def handlers(self): return {name:spec.handler for name,spec in self._tools.items()}
 
+    def _invoke(self,spec,arguments):
+        completed=queue.Queue(maxsize=1)
+        def run():
+            try: completed.put((True,spec.handler(arguments)))
+            except Exception as exc: completed.put((False,exc))
+        threading.Thread(target=run,daemon=True,name=f'tool-{spec.name}').start()
+        try: succeeded,value=completed.get(timeout=spec.timeout_seconds)
+        except queue.Empty: raise ToolTimeoutError(f'{spec.name} timed out after {spec.timeout_seconds} seconds')
+        if not succeeded: raise value
+        return value
+
     def execute(self,name,arguments):
-        started=time.monotonic(); result=None; error=None; truncated=False; status='success'
+        started=time.monotonic(); result=None; error=None; error_code=None; truncated=False; status='success'
         try:
             spec=self.require(name)
             validate_schema(arguments,spec.input_schema)
-            result=spec.handler(arguments)
+            result=self._invoke(spec,arguments)
             result,truncated=limit_output(result,spec.output_limit)
+        except ToolValidationError as exc:
+            status='error'; error_code='validation_error'; error=str(exc)
+        except ToolTimeoutError as exc:
+            status='error'; error_code='timeout'; error=str(exc)
         except Exception as exc:
-            status='error'; error=str(exc)
-        return ToolResult(name,arguments,status,result,error,round(time.monotonic()-started,2),truncated).as_dict()
+            status='error'; error_code='execution_error'; error=str(exc)
+        return ToolResult(name,arguments,status,result,error,error_code,round(time.monotonic()-started,2),truncated).as_dict()
 
     def model_catalog(self):
         return [{
             'name':spec.name,
             'description':spec.description,
-            'input_schema':spec.input_schema,
+            'input_schema':thaw(spec.input_schema),
             'risk_level':spec.risk_level.value,
         } for spec in self._tools.values()]
 

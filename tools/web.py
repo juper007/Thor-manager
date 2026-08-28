@@ -3,6 +3,7 @@ import http.client
 import ipaddress
 import re
 import socket
+import time
 import urllib.parse
 import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
@@ -70,11 +71,13 @@ def _open_pinned(parsed,addresses,timeout=20):
     raise last_error or OSError('unable to connect to validated target')
 
 
-def request(url,limit=800_000):
-    current=url
+def request(url,limit=800_000,timeout=20):
+    current=url; deadline=time.monotonic()+timeout
     for _ in range(6):
+        remaining=deadline-time.monotonic()
+        if remaining<=0: raise TimeoutError(f'web request timed out after {timeout} seconds')
         parsed,addresses=_public_target(current)
-        response=_open_pinned(parsed,addresses)
+        response=_open_pinned(parsed,addresses,timeout=remaining)
         try:
             if response.status in (301,302,303,307,308):
                 location=response.headers.get('Location')

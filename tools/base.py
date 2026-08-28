@@ -1,6 +1,8 @@
 import json
+import copy
 from dataclasses import dataclass
 from enum import Enum
+from types import MappingProxyType
 from typing import Any,Callable
 
 
@@ -12,6 +14,10 @@ class RiskLevel(str,Enum):
 
 
 class ToolValidationError(ValueError):
+    pass
+
+
+class ToolTimeoutError(TimeoutError):
     pass
 
 
@@ -67,15 +73,19 @@ class ToolSpec:
     def __post_init__(self):
         if not self.name or not self.name.replace('_','').isalnum(): raise ValueError('tool name must contain letters, numbers, or underscores')
         if self.input_schema.get('type')!='object': raise ValueError('tool input schema must describe an object')
+        if self.timeout_seconds<=0: raise ValueError('tool timeout must be positive')
+        if self.output_limit<=0: raise ValueError('tool output limit must be positive')
+        object.__setattr__(self,'input_schema',freeze(copy.deepcopy(self.input_schema)))
 
 
 @dataclass
 class ToolResult:
     name:str
-    arguments:dict
+    arguments:Any
     status:str
     result:Any
     error:str|None
+    error_code:str|None
     seconds:float
     truncated:bool=False
 
@@ -86,12 +96,30 @@ class ToolResult:
             'status':self.status,
             'result':self.result,
             'error':self.error,
+            'error_code':self.error_code,
             'seconds':self.seconds,
             'truncated':self.truncated,
         }
 
 
+def freeze(value):
+    if isinstance(value,dict): return MappingProxyType({key:freeze(item) for key,item in value.items()})
+    if isinstance(value,list): return tuple(freeze(item) for item in value)
+    return value
+
+
+def thaw(value):
+    if isinstance(value,MappingProxyType): return {key:thaw(item) for key,item in value.items()}
+    if isinstance(value,tuple): return [thaw(item) for item in value]
+    return value
+
+
 def limit_output(value:Any,limit:int):
-    encoded=json.dumps(value,ensure_ascii=False,default=str)
-    if len(encoded)<=limit: return value,False
-    return {'preview':encoded[:limit],'truncated':True},True
+    chunks=[]; used=0; truncated=False
+    for chunk in json.JSONEncoder(ensure_ascii=False,default=str).iterencode(value):
+        remaining=limit-used
+        if len(chunk)>remaining:
+            chunks.append(chunk[:max(0,remaining)]); truncated=True; break
+        chunks.append(chunk); used+=len(chunk)
+    if not truncated: return value,False
+    return {'preview':''.join(chunks),'truncated':True},True

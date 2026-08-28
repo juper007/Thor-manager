@@ -70,4 +70,4 @@ skills/            reusable agent guidance
 tests/             regression and architecture contracts
 ```
 
-`agent_tools.py` remains a compatibility entrypoint while `tools/registry.py` owns registration, JSON Schema validation, standardized results, risk metadata, timing, and output limits. `AgentRuntime` receives the Registry and parsing dependencies through its constructor rather than importing the compatibility facade.
+`agent_tools.py` remains a compatibility entrypoint while `tools/registry.py` owns registration, JSON Schema validation, standardized error codes, risk metadata, timeouts, timing, and incremental output limits. Registered schemas are immutable copies. `AgentRuntime` receives the Registry and parsing dependencies through its constructor rather than importing the compatibility facade.

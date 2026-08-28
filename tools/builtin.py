@@ -14,12 +14,12 @@ def build_registry():
     registry.register(ToolSpec(
         'web_search','Search the current public web for recent or externally verifiable information.',
         {**OBJECT,'properties':{'query':{'type':'string','minLength':1,'maxLength':300},'max_results':{'type':'integer','minimum':1,'maximum':8}},'required':['query']},
-        web_search,RiskLevel.READ,20,30_000,
+        web_search,RiskLevel.READ,25,30_000,
     ))
     registry.register(ToolSpec(
         'read_webpage','Read text from a public HTTP or HTTPS page; private network targets are blocked.',
         {**OBJECT,'properties':{'url':{'type':'string','minLength':1,'maxLength':2048}},'required':['url']},
-        read_webpage,RiskLevel.READ,20,30_000,
+        read_webpage,RiskLevel.READ,25,30_000,
     ))
     registry.register(ToolSpec(
         'calculator','Evaluate a bounded arithmetic expression.',

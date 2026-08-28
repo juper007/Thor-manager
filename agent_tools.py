@@ -46,7 +46,7 @@ def parse_tool_calls(text):
             item=json.loads(raw); items=item.get('tool_calls',[]) if isinstance(item,dict) and 'tool_calls' in item else [item]
             for entry in items:
                 name=entry.get('name'); args=entry.get('arguments',{})
-                if DEFAULT_REGISTRY.get(name) and isinstance(args,dict): calls.append({'name':name,'arguments':args})
+                if isinstance(name,str) and name: calls.append({'name':name,'arguments':args})
         except (json.JSONDecodeError,AttributeError): pass
     if not calls:
         relaxed=re.sub(r'\\?</?invoke[^>]*>','',text,flags=re.I).replace('\\_','_').replace('\\*','*')

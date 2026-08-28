@@ -1,4 +1,5 @@
 import unittest
+import threading
 
 import agent_tools
 from tools.base import RiskLevel,ToolSpec
@@ -24,6 +25,7 @@ class ToolRegistryTests(unittest.TestCase):
     def test_unknown_tool_returns_standard_error(self):
         result=ToolRegistry().execute('missing',{})
         self.assertEqual(result['status'],'error')
+        self.assertEqual(result['error_code'],'validation_error')
         self.assertIn('unknown tool',result['error'])
         self.assertIsNone(result['result'])
 
@@ -31,6 +33,7 @@ class ToolRegistryTests(unittest.TestCase):
         registry=ToolRegistry(); registry.register(ToolSpec('echo','Echo text',SCHEMA,lambda args:args['text']))
         result=registry.execute('echo',{})
         self.assertEqual(result['status'],'error')
+        self.assertEqual(result['error_code'],'validation_error')
         self.assertIn('required property',result['error'])
 
     def test_argument_type_and_unknown_properties_are_validated(self):
@@ -45,7 +48,17 @@ class ToolRegistryTests(unittest.TestCase):
         result=registry.execute('failure',{})
         self.assertEqual(result['status'],'error')
         self.assertEqual(result['error'],'handler failed')
+        self.assertEqual(result['error_code'],'execution_error')
         self.assertIn('seconds',result)
+
+    def test_timeout_uses_standard_result(self):
+        release=threading.Event(); registry=ToolRegistry()
+        registry.register(ToolSpec('slow','Slow tool',{'type':'object','properties':{},'additionalProperties':False},lambda _:release.wait(.2),timeout_seconds=.01))
+        result=registry.execute('slow',{})
+        release.set()
+        self.assertEqual(result['status'],'error')
+        self.assertEqual(result['error_code'],'timeout')
+        self.assertIn('timed out',result['error'])
 
     def test_output_is_limited(self):
         registry=ToolRegistry(); registry.register(ToolSpec('large','Large output',SCHEMA,lambda _: 'x'*100,output_limit=20))
@@ -53,6 +66,15 @@ class ToolRegistryTests(unittest.TestCase):
         self.assertEqual(result['status'],'success')
         self.assertTrue(result['truncated'])
         self.assertTrue(result['result']['truncated'])
+
+    def test_registered_schema_is_immutable_copy(self):
+        original={'type':'object','properties':{'text':{'type':'string','maxLength':5}},'required':['text'],'additionalProperties':False}
+        spec=ToolSpec('echo','Echo',original,lambda args:args['text'])
+        original['properties']['text']['maxLength']=100
+        with self.assertRaises(TypeError):
+            spec.input_schema['properties']['text']['maxLength']=100
+        registry=ToolRegistry(); registry.register(spec)
+        self.assertEqual(registry.execute('echo',{'text':'123456'})['error_code'],'validation_error')
 
     def test_builtin_registry_catalog(self):
         registry=build_registry()
