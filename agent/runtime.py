@@ -42,7 +42,7 @@ def validate_messages(value):
 
 class AgentRuntime:
     def __init__(self,root,model_call,registry,parse_calls,skill_loader,strip_tool_calls,concurrency=1,
-                 max_iterations=3,max_tool_calls=8,total_timeout=900,recent_run_limit=100,session_store=None):
+                 max_iterations=5,max_tool_calls=8,total_timeout=900,recent_run_limit=100,session_store=None):
         self.root=root; self.model_call=model_call; self.registry=registry; self.parse_calls=parse_calls
         self.skill_loader=skill_loader; self.strip_tool_calls=strip_tool_calls
         self.max_iterations=max(1,max_iterations); self.max_tool_calls=max(1,max_tool_calls)

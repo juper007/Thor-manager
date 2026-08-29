@@ -32,6 +32,7 @@ THOR_AI_CONCURRENCY=1
 THOR_SESSION_DB=/home/juper007/thor-monitor/data/sessions.db
 THOR_SESSION_MAX_AGE_DAYS=30
 THOR_SESSION_KEEP_RECENT=100
+THOR_WORKSPACE_ROOTS=/home/juper007/thor-monitor
 ```
 
 Install or update the unit only after the environment file exists:
@@ -67,6 +68,10 @@ POST /api/chat/sessions/{run_id}/resume   {"run_id":"optional-new-run-id"}
 ```
 
 Only failed or cancelled sessions can be resumed. Retention defaults to 30 days while preserving the 100 most recently updated sessions. Credential-like fields and inline secrets are redacted before storage.
+
+## Read-only workspace tools
+
+`THOR_WORKSPACE_ROOTS` is an OS path-separator-delimited allowlist of directories the agent may inspect. It defaults to the server working directory. The workspace tools can select a registered root, list and read bounded text files, search with ripgrep or a safe Python fallback, and inspect Git status/diffs. Resolved paths and symlink targets must remain inside the active root; hidden and Git-ignored files are excluded from listing and search by default.
 
 Run the optional live web-tool smoke test on a networked host:
 

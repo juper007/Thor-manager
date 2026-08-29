@@ -13,6 +13,8 @@ DEFAULT_REGISTRY=build_registry()
 TOOLS=DEFAULT_REGISTRY.handlers()
 calculator=TOOLS['calculator']; current_time=TOOLS['current_time']; python_execute=TOOLS['python_execute']
 system_status=TOOLS['system_status']; web_search=TOOLS['web_search']; read_webpage=TOOLS['read_webpage']
+workspace_open=TOOLS['workspace_open']; file_list=TOOLS['file_list']; file_read=TOOLS['file_read']; file_search=TOOLS['file_search']
+git_status=TOOLS['git_status']; git_diff=TOOLS['git_diff']
 
 TOOL_GUIDE_PREFIX='''You are the local AI agent running on Jetson Thor. You can use server-side tools.
 When a tool is needed, respond only with one or more tags in this exact format:
