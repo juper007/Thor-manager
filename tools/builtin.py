@@ -1,6 +1,6 @@
 from tools.base import RiskLevel,ToolSpec
 from tools.calculation import calculator,current_time
-from tools.coding import file_patch,file_write,git_commit,shell_execute,test_run
+from tools.coding import file_patch,file_write,git_commit,git_stage,shell_execute,test_run
 from tools.python import python_execute
 from tools.registry import ToolRegistry
 from tools.system import system_status
@@ -85,11 +85,14 @@ def build_registry(workspace=None):
         lambda args:file_patch(workspace,args),RiskLevel.SAFE_WRITE,10,100_000,
     ))
     command_schema={**OBJECT,'properties':{**WORKSPACE,'command':{'type':'string','minLength':1,'maxLength':4000},'timeout_seconds':{'type':'integer','minimum':1,'maximum':300}},'required':['command']}
-    registry.register(ToolSpec('shell_execute','Run a bounded command inside a network-disabled Docker sandbox mounted to the selected workspace.',command_schema,
-        lambda args:shell_execute(workspace,args),RiskLevel.ELEVATED,310,40_000))
-    registry.register(ToolSpec('test_run','Run a bounded test command inside a network-disabled Docker sandbox and return its exact exit status.',command_schema,
-        lambda args:test_run(workspace,args),RiskLevel.SAFE_WRITE,310,40_000))
+    registry.register(ToolSpec('shell_execute','Run a bounded command inside a network-disabled Docker sandbox with writable workspace access.',command_schema,
+        lambda args:shell_execute(workspace,args),RiskLevel.DESTRUCTIVE,310,40_000))
+    registry.register(ToolSpec('test_run','Run a bounded test command with the workspace mounted read-only in a network-disabled Docker sandbox.',command_schema,
+        lambda args:test_run(workspace,args),RiskLevel.ELEVATED,310,40_000))
+    registry.register(ToolSpec('git_stage','Stage explicit files only when their SHA-256 values still match.',
+        {**OBJECT,'properties':{**WORKSPACE,'files':{'type':'array','items':{'type':'object','properties':{'path':{'type':'string','minLength':1,'maxLength':4096},'sha256':{'type':'string','minLength':64,'maxLength':64}},'required':['path','sha256'],'additionalProperties':False}}},'required':['files']},
+        lambda args:git_stage(workspace,args),RiskLevel.ELEVATED,20,30_000))
     registry.register(ToolSpec('git_commit','Create a local Git commit from already staged changes. This never pushes.',
-        {**OBJECT,'properties':{**WORKSPACE,'message':{'type':'string','minLength':1,'maxLength':200}},'required':['message']},
+        {**OBJECT,'properties':{**WORKSPACE,'message':{'type':'string','minLength':1,'maxLength':200},'expected_index_hash':{'type':'string','minLength':40,'maxLength':64}},'required':['message','expected_index_hash']},
         lambda args:git_commit(workspace,args),RiskLevel.DESTRUCTIVE,70,20_000))
     return registry

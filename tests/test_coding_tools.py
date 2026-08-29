@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from tools.coding import file_patch,file_write,git_commit,sha256_bytes,shell_execute,test_run
+from tools.coding import file_patch,file_write,git_commit,git_stage,sha256_bytes,shell_execute,test_run
 from tools.workspace import WorkspaceError,WorkspaceManager
 
 
@@ -46,13 +46,22 @@ class CodingToolTests(unittest.TestCase):
             result=test_run(self.manager,{'command':'python -m unittest','timeout_seconds':30})
         command=run.call_args.args[0]
         self.assertEqual(result['return_code'],0); self.assertIn('--network',command); self.assertIn('none',command)
-        self.assertIn('--pids-limit',command); self.assertIn(':rw',command[command.index('-v')+1])
+        self.assertIn('--pids-limit',command); self.assertIn(':ro',command[command.index('-v')+1]); self.assertIn('--read-only',command)
 
     def test_git_commit_uses_only_staged_changes_and_does_not_push(self):
-        self.path.write_text('value = 3\n'); subprocess.run(['git','-C',str(self.root),'add','app.py'],check=True)
-        result=git_commit(self.manager,{'message':'update value'})
+        self.path.write_text('value = 3\n'); digest=sha256_bytes(self.path.read_bytes())
+        staged=git_stage(self.manager,{'files':[{'path':'app.py','sha256':digest}]})
+        result=git_commit(self.manager,{'message':'update value','expected_index_hash':staged['index_hash']})
         self.assertTrue(result['commit']); self.assertNotIn('push',result['output'].lower())
         self.assertEqual(subprocess.run(['git','-C',str(self.root),'log','-1','--pretty=%s'],capture_output=True,text=True).stdout.strip(),'update value')
+
+    def test_commit_rejects_changed_index_and_nothing_staged(self):
+        head=subprocess.run(['git','-C',str(self.root),'rev-parse','HEAD^{tree}'],capture_output=True,text=True).stdout.strip()
+        with self.assertRaises(WorkspaceError): git_commit(self.manager,{'message':'empty','expected_index_hash':head})
+        self.path.write_text('value = 4\n'); digest=sha256_bytes(self.path.read_bytes())
+        staged=git_stage(self.manager,{'files':[{'path':'app.py','sha256':digest}]})
+        (self.root/'other.txt').write_text('other'); subprocess.run(['git','-C',str(self.root),'add','other.txt'],check=True)
+        with self.assertRaises(WorkspaceError): git_commit(self.manager,{'message':'changed','expected_index_hash':staged['index_hash']})
 
 
 if __name__=='__main__': unittest.main()

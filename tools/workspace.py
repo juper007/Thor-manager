@@ -38,6 +38,7 @@ class WorkspaceManager:
         selected=Path(default).expanduser().resolve(strict=True) if default else roots[0]
         if selected not in roots: raise WorkspaceError('default workspace is not in allowed roots')
         self.allowed_roots=tuple(roots); self.default=selected
+        self._mutation_locks={root:threading.RLock() for root in roots}
 
     @classmethod
     def from_environment(cls,default=None):
@@ -63,6 +64,8 @@ class WorkspaceManager:
         selected=self.select(value)
         return self.describe(selected)
 
+    def mutation_lock(self,root): return self._mutation_locks[root]
+
     def resolve(self,value='.',kind=None,workspace=None):
         root=self.select(workspace)
         raw=Path(value or '.')
@@ -72,11 +75,11 @@ class WorkspaceManager:
         if kind=='dir' and not candidate.is_dir(): raise WorkspaceError('path is not a directory')
         return root,candidate
 
-    def _git(self,root,*args,timeout=10):
+    def _git(self,root,*args,timeout=10,allowed_codes=(0,1)):
         try:
             result=subprocess.run(['git','-C',str(root),*args],capture_output=True,text=True,timeout=timeout,encoding='utf-8',errors='replace')
         except (OSError,subprocess.TimeoutExpired) as exc: raise WorkspaceError(f'git command failed: {exc}')
-        if result.returncode not in (0,1): raise WorkspaceError((result.stderr or 'git command failed').strip())
+        if result.returncode not in allowed_codes: raise WorkspaceError((result.stderr or result.stdout or 'git command failed').strip())
         return result
 
     def ignored(self,path,root=None):

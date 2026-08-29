@@ -32,7 +32,7 @@
 - [x] 정적 파일 경로 탈출 방지
 - [x] 내부 주소 및 리다이렉트 SSRF 방지
 - [x] AI 요청 동시 실행 제한
-- [x] 서버 회귀 테스트 104개 통과
+- [x] 서버 회귀 테스트 105개 통과
 - [x] Jetson Thor 배포 및 서비스 상태 확인
 - [x] GitHub `juper007/Thor-manager` 저장소 연결
 
@@ -415,3 +415,4 @@
 | 2026-08-29 | 6 | 위험도별 Permission Engine, 승인 대기·허용·거부·만료, 범위별 grant, API와 SQLite 기록 구현 | 자동 테스트 94개, 스키마 v2, 실제 Qwen python_execute 일회 승인 전 차단·승인 후 실행 통과 | `3c3d0d1` |
 | 2026-08-29 | 6 보강 | 승인 대기 슬롯 반환, 결정·grant 원자화, 메모리 정리, run 단위 거부, 영구 grant upsert·철회 구현 | 자동 테스트 99개, 스키마 v3, 승인 대기 중 별도 Qwen 채팅 및 승인 후 실행 통과 | `5b495a6` |
 | 2026-08-29 | 7 | SHA-256 충돌 감지 파일 변경, diff preview, 격리 셸·테스트, 로컬 Git commit 구현 | 자동 테스트 104개, 실제 Qwen 승인 기반 파일 생성·sandbox PASS, 임시 Git commit 통과 | `a5a522d` |
+| 2026-08-29 | 7 보강 | 교체 직전 재검증, read-only test sandbox, 명시적 git_stage와 index hash 고정, commit 오류 처리 | 자동 테스트 105개, 실제 Thor read-only 삭제 거부, edit→stage→commit 및 index 변경 차단 통과 | 커밋 예정 |

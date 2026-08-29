@@ -80,7 +80,7 @@ Read tools run automatically. Safe-write, elevated, and destructive tools wait f
 
 `THOR_WORKSPACE_ROOTS` is an OS path-separator-delimited allowlist of directories the agent may inspect. It defaults to the server working directory. The workspace tools can select a registered root, list and read bounded text files, search with ripgrep or a safe Python fallback, and inspect filtered Git status/diffs. Resolved paths and symlink targets must remain inside the selected root; hidden, protected, and Git-ignored files are excluded. Selection is stateless: when multiple roots are registered, pass the exact `workspace` name or root returned by `workspace_open` to every subsequent workspace tool.
 
-Coding tools provide SHA-256 guarded `file_patch` and `file_write`, Docker-isolated `shell_execute` and `test_run`, and local-only `git_commit`. File changes return a unified diff and require explicit `apply=true`; existing files reject stale hashes. Sandbox commands run without network access under CPU, memory, PID, and timeout limits. Dangerous host-management and destructive command patterns are rejected, and `git_commit` never pushes.
+Coding tools provide SHA-256 guarded `file_patch` and `file_write`, Docker-isolated `shell_execute` and `test_run`, and local-only `git_stage`/`git_commit`. File changes return a unified diff and require explicit `apply=true`; existing files are rechecked immediately before atomic replacement. Tests mount the workspace read-only, while writable shell access requires destructive approval. `git_stage` accepts only explicit path/hash pairs and returns an index hash that `git_commit` must match; commit failures are never treated as success and no tool pushes.
 
 Run the optional live web-tool smoke test on a networked host:
 
