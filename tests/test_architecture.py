@@ -20,10 +20,11 @@ class ModuleBoundaryTests(unittest.TestCase):
         self.assertIs(agent_tools.read_webpage,web.read_webpage)
 
     def test_server_delegates_model_call(self):
+        deltas=[]
         with mock.patch.object(models,'edge_chat',return_value='model-result') as call:
-            result=server.edge_chat([{'role':'user','content':'hello'}],max_tokens=123)
+            result=server.edge_chat([{'role':'user','content':'hello'}],max_tokens=123,on_delta=deltas.append)
         self.assertEqual(result,'model-result')
-        call.assert_called_once_with([{'role':'user','content':'hello'}],max_tokens=123)
+        call.assert_called_once_with([{'role':'user','content':'hello'}],max_tokens=123,on_delta=deltas.append)
 
     def test_agent_loop_is_not_implemented_in_server(self):
         self.assertIsInstance(server.runtime,AgentRuntime)

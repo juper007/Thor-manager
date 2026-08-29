@@ -42,12 +42,12 @@ def validate_messages(value):
 
 class AgentRuntime:
     def __init__(self,root,model_call,registry,parse_calls,skill_loader,strip_tool_calls,concurrency=1,
-                 max_iterations=5,max_tool_calls=8,total_timeout=900,recent_run_limit=100,session_store=None,permission_engine=None):
+                 max_iterations=5,max_tool_calls=8,total_timeout=900,recent_run_limit=100,session_store=None,permission_engine=None,stream_model_call=None):
         self.root=root; self.model_call=model_call; self.registry=registry; self.parse_calls=parse_calls
         self.skill_loader=skill_loader; self.strip_tool_calls=strip_tool_calls
         self.max_iterations=max(1,max_iterations); self.max_tool_calls=max(1,max_tool_calls)
         self.total_timeout=max(.01,total_timeout); self.recent_run_limit=max(1,recent_run_limit)
-        self.session_store=session_store; self.permission_engine=permission_engine
+        self.session_store=session_store; self.permission_engine=permission_engine; self.stream_model_call=stream_model_call
         self.gate=threading.BoundedSemaphore(max(1,concurrency))
         self._runs=OrderedDict(); self._runs_lock=threading.Lock()
 
@@ -85,7 +85,7 @@ class AgentRuntime:
         _,answer,events,sources=self.run_chat(messages)
         return answer,events,sources
 
-    def run_chat(self,messages,run_id=None,resumed_from=None):
+    def run_chat(self,messages,run_id=None,resumed_from=None,on_delta=None):
         run=self.create_run(run_id)
         if self.session_store is not None:
             self.session_store.create_session(run.snapshot(),messages,resumed_from=resumed_from)
@@ -104,7 +104,7 @@ class AgentRuntime:
                 if remaining<=0: raise RunTimeout(f'run exceeded {self.total_timeout} second limit')
                 if self.gate.acquire(timeout=min(.1,remaining)): capacity_held[0]=True
         try:
-            answer,events,sources=self._run(run,messages,started,release_capacity,reacquire_capacity)
+            answer,events,sources=self._run(run,messages,started,release_capacity,reacquire_capacity,on_delta)
             if self.session_store is not None: self.session_store.complete_session(run.snapshot(),answer)
             return run,answer,events,sources
         except RunCancelled as exc:
@@ -131,12 +131,22 @@ class AgentRuntime:
         if time.monotonic()-started>self.total_timeout:
             raise RunTimeout(f'run exceeded {self.total_timeout} second limit')
 
-    def _call_model(self,run,conversation,started,phase='planning'):
+    def _call_model(self,run,conversation,started,phase='planning',on_delta=None):
         self._check_active(run,started); run.emit('model.started',{'phase':phase})
         completed=queue.Queue(maxsize=1)
         done=threading.Event(); run._model_done=done
+        streamed=[]; emitted=[False]
+        def receive(delta):
+            streamed.append(delta); prefix=''.join(streamed)
+            if emitted[0]: on_delta(delta); return
+            stripped=prefix.lstrip()
+            if stripped.startswith(('<','{','`')): return
+            if len(prefix)>=16 or stripped:
+                emitted[0]=True; on_delta(prefix)
         def invoke():
-            try: completed.put((True,self.model_call(conversation)))
+            try:
+                call=self.stream_model_call if on_delta is not None and self.stream_model_call is not None else None
+                completed.put((True,call(conversation,receive) if call else self.model_call(conversation)))
             except Exception as exc: completed.put((False,exc))
             finally: done.set()
         worker=threading.Thread(target=invoke,daemon=True,name=f'model-{run.run_id[:12]}')
@@ -149,6 +159,7 @@ class AgentRuntime:
             try: succeeded,value=completed.get(timeout=min(.1,max(.01,remaining)))
             except queue.Empty: continue
             if not succeeded: raise value
+            if on_delta is not None and not emitted[0] and not self.parse_calls(value): on_delta(value)
             run.emit('model.completed',{'phase':phase,'characters':len(value)}); return value
 
     def _require_final_answer(self,answer,phase):
@@ -156,13 +167,13 @@ class AgentRuntime:
             raise RunLimitError(f'{phase} produced another tool call')
         return answer
 
-    def _run(self,run,messages,started,release_capacity=lambda:None,reacquire_capacity=lambda:None):
+    def _run(self,run,messages,started,release_capacity=lambda:None,reacquire_capacity=lambda:None,on_delta=None):
         conversation=[{'role':'system','content':self.skill_loader(self.root)},*messages]
         events=[]; sources=[]; answer=''; tool_cache={}
         run.transition(RunState.PLANNING)
         for iteration in range(1,self.max_iterations+1):
             self._check_active(run,started); run.set_iterations(iteration)
-            answer=self._call_model(run,conversation,started)
+            answer=self._call_model(run,conversation,started,on_delta=on_delta)
             calls=self.parse_calls(answer)
             if not calls: break
             new_call_count=sum(json.dumps(call,ensure_ascii=False,sort_keys=True) not in tool_cache for call in calls)
@@ -200,11 +211,11 @@ class AgentRuntime:
             if duplicate_count==len(calls):
                 conversation.append({'role':'user','content':'The identical tool call already completed. Respond with the final answer now, using the exact returned values. Do not emit JSON, tool calls, or invoke tags.'})
                 run.transition(RunState.PLANNING,'duplicate tool call detected')
-                answer=self._require_final_answer(self._call_model(run,conversation,started,'duplicate_recovery'),'duplicate recovery'); break
+                answer=self._require_final_answer(self._call_model(run,conversation,started,'duplicate_recovery',on_delta),'duplicate recovery'); break
             run.transition(RunState.PLANNING)
         else:
             conversation.append({'role':'user','content':'Tool limit reached. Answer now using the available results without another tool call.'})
-            answer=self._require_final_answer(self._call_model(run,conversation,started,'limit_recovery'),'iteration-limit recovery')
+            answer=self._require_final_answer(self._call_model(run,conversation,started,'limit_recovery',on_delta),'iteration-limit recovery')
         self._check_active(run,started)
         if run.transition_if_active(RunState.VERIFYING) is None: raise RunCancelled('run cancelled by user')
         unique=[]; seen=set()

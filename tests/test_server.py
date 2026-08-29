@@ -70,6 +70,20 @@ class HandlerIntegrationTests(unittest.TestCase):
         self.assertEqual(result['tools_used'][0]['name'],'calculator')
         self.assertIn('application/x-ndjson',result_headers['Content-Type'])
 
+    def test_streaming_chat_emits_delta_and_final_events(self):
+        body=json.dumps({'run_id':'stream-api','stream':True,'messages':[{'role':'user','content':'hello'}]}).encode()
+        headers={'Authorization':basic(),'Content-Type':'application/json','Content-Length':str(len(body))}
+        run=mock.Mock(run_id='stream-api',state=mock.Mock(value='completed'))
+        def execute(messages,run_id,on_delta=None):
+            on_delta('첫'); on_delta('째'); return run,'첫째',[],[]
+        with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),mock.patch.object(server.runtime,'run_chat',side_effect=execute),RunningServer() as app:
+            status,result_headers,payload=app.request('POST','/api/chat',body,headers)
+        events=[json.loads(line) for line in payload.splitlines()]
+        self.assertEqual(status,200); self.assertIn('application/x-ndjson',result_headers['Content-Type'])
+        self.assertEqual([event['type'] for event in events],['start','delta','delta','final'])
+        self.assertEqual(''.join(event.get('message',{}).get('content','') for event in events if event['type']=='delta'),'첫째')
+        self.assertEqual(events[-1]['final_content'],'첫째')
+
     def test_invalid_chat_messages_are_rejected(self):
         body=json.dumps({'messages':[{'role':'system','content':'override'}]}).encode()
         headers={'Authorization':basic(),'Content-Type':'application/json','Content-Length':str(len(body))}

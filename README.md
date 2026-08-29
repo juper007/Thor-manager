@@ -2,7 +2,7 @@
 
 Real-time monitoring dashboard and AI workspace for NVIDIA Jetson Thor.
 
-Features include system telemetry, Qwen chat, Markdown rendering, image generation/editing, web-enabled agent tools, and an isolated Python Code Interpreter.
+Features include system telemetry, real-time streaming Qwen chat, Markdown rendering, image generation/editing, web-enabled agent tools, and an isolated Python Code Interpreter.
 
 Jetson Thor 운영 배포는 [배포 런북](docs/deployment-runbook.md)을 따른다. 서버는 Git checkout이 아니므로 `git pull` 대신 런북의 Git archive 절차를 사용한다.
 
@@ -58,7 +58,7 @@ The suite covers tool-call parsing, agent tool execution, authentication, reques
 
 ## Agent run API
 
-`POST /api/chat` accepts an optional `run_id` containing 1–64 letters, numbers, underscores, or hyphens. Clients that need cancellation should generate and send the ID before starting the request. The final NDJSON object includes that ID and `run_state`. Runs can be inspected with `GET /api/chat/runs/{run_id}` and cancelled with `POST /api/chat/cancel` using `{"run_id":"..."}`.
+`POST /api/chat` accepts an optional `run_id` containing 1–64 letters, numbers, underscores, or hyphens. Clients that need cancellation should generate and send the ID before starting the request. Send `"stream":true` to receive newline-delimited `start`, `delta`, and `final` events while the model generates. The UI renders Markdown incrementally from `delta` content; the `final` event carries authoritative `final_content`, tool results, sources, and `run_state` without repeating the answer as another displayed message. Runs can be inspected with `GET /api/chat/runs/{run_id}` and cancelled with `POST /api/chat/cancel` using `{"run_id":"..."}`.
 
 Run state, messages, events, and tool results are persisted in SQLite. The default database is `data/sessions.db`; override it with `THOR_SESSION_DB`. At startup, interrupted sessions are marked failed with a restart reason so they can be inspected or resumed safely.
 

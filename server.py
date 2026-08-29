@@ -45,8 +45,8 @@ def image_history():
     except (OSError, json.JSONDecodeError): rows = []
     return list(reversed(rows[-100:]))
 
-def edge_chat(messages, max_tokens=4096):
-    return models.edge_chat(messages,max_tokens=max_tokens)
+def edge_chat(messages, max_tokens=4096, on_delta=None):
+    return models.edge_chat(messages,max_tokens=max_tokens,on_delta=on_delta)
 
 runtime=AgentRuntime(
     ROOT,
@@ -58,6 +58,7 @@ runtime=AgentRuntime(
     AI_CONCURRENCY,
     session_store=session_store,
     permission_engine=permission_engine,
+    stream_model_call=lambda messages,callback: edge_chat(messages,on_delta=callback),
 )
 
 
@@ -258,7 +259,10 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             incoming=self.read_json_body(2_000_000)
             requested_run_id=validate_run_id(incoming.get('run_id'))
-            run,content,events,sources=agent_run_chat(validate_messages(incoming.get('messages')),requested_run_id)
+            messages=validate_messages(incoming.get('messages'))
+            if incoming.get('stream') is True:
+                self.stream_chat(messages,requested_run_id); return
+            run,content,events,sources=agent_run_chat(messages,requested_run_id)
             public_events=[{'name':e['name'],'arguments':e['arguments'],'seconds':e['seconds'],'error':e['error']} for e in events]
             body=(json.dumps({'run_id':run.run_id,'run_state':run.state.value,'message':{'role':'assistant','content':content},'tools_used':public_events,'sources':sources,'done':True},ensure_ascii=False)+'\n').encode()
             self.send_response(200); self.send_header('Content-Type','application/x-ndjson; charset=utf-8'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
@@ -274,6 +278,19 @@ class Handler(SimpleHTTPRequestHandler):
             detail=e.read().decode(errors='replace')[:1000]; body=json.dumps({'error':detail,'done':True}).encode(); self.send_response(502); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body)
         except Exception as e:
             body=json.dumps({'error':str(e),'done':True}).encode(); self.send_response(502); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body)
+    def stream_chat(self,messages,run_id):
+        self.send_response(200); self.send_header('Content-Type','application/x-ndjson; charset=utf-8')
+        self.send_header('X-Accel-Buffering','no'); self.send_header('Connection','close'); self.end_headers()
+        def send(value):
+            self.wfile.write((json.dumps(value,ensure_ascii=False)+'\n').encode()); self.wfile.flush()
+        try:
+            send({'type':'start','run_id':run_id})
+            run,content,events,sources=runtime.run_chat(messages,run_id,on_delta=lambda delta:send({'type':'delta','run_id':run_id,'message':{'role':'assistant','content':delta}}))
+            public_events=[{'name':e['name'],'arguments':e['arguments'],'seconds':e['seconds'],'error':e['error']} for e in events]
+            send({'type':'final','run_id':run.run_id,'run_state':run.state.value,'message':{'role':'assistant','content':''},'final_content':content,'tools_used':public_events,'sources':sources,'done':True})
+        except Exception as exc:
+            try: send({'type':'error','run_id':run_id,'error':str(exc),'done':True})
+            except (BrokenPipeError,ConnectionResetError): pass
     def do_DELETE(self):
         if not self.authenticated(): return
         route=self.path.split('?',1)[0]

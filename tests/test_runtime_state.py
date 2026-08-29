@@ -141,5 +141,25 @@ class AgentStateTests(unittest.TestCase):
         with self.assertRaises(RunCancelled): runtime.run_chat([{'role':'user','content':'go'}],'finish-race')
         self.assertEqual(runtime.get_run('finish-race').state,RunState.CANCELLED)
 
+    def test_streaming_emits_answer_deltas(self):
+        runtime=make_runtime([]); chunks=[]
+        def stream(_,callback):
+            for value in ('안','녕','하세요'): callback(value)
+            return '안녕하세요'
+        runtime.stream_model_call=stream
+        _,answer,_,_=runtime.run_chat([{'role':'user','content':'hello'}],'stream',on_delta=chunks.append)
+        self.assertEqual(answer,'안녕하세요'); self.assertEqual(''.join(chunks),'안녕하세요')
+
+    def test_streaming_hides_tool_call_markup(self):
+        runtime=make_runtime([]); chunks=[]; replies=iter(['<tool_call>{"name":"fake","arguments":{"value":"x"}}</tool_call>','완료'])
+        runtime.parse_calls=lambda value: [{'name':'fake','arguments':{'value':'x'}}] if value.startswith('<tool_call>') else []
+        def stream(_,callback):
+            value=next(replies)
+            for part in value: callback(part)
+            return value
+        runtime.stream_model_call=stream
+        _,answer,_,_=runtime.run_chat([{'role':'user','content':'go'}],'stream-tool',on_delta=chunks.append)
+        self.assertEqual(answer,'완료'); self.assertEqual(''.join(chunks),'완료'); self.assertNotIn('tool_call',''.join(chunks))
+
 
 if __name__=='__main__': unittest.main()

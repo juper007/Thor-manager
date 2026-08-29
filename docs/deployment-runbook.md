@@ -120,7 +120,7 @@ THOR_SESSION_DB="$deploy_test_dir/sessions.db" PYTHONDONTWRITEBYTECODE=1 python3
 rm -rf -- "$deploy_test_dir"
 ```
 
-현재 기준은 전체 테스트 105개 통과다. 한 개라도 실패하면 서비스를 재시작하지 않는다.
+현재 기준은 전체 테스트 108개 통과다. 한 개라도 실패하면 서비스를 재시작하지 않는다.
 
 ## 5. 서비스 재시작
 
@@ -148,6 +148,20 @@ systemctl is-active thor-monitor.service
 `kill` 대상 PID가 1 이하라면 중단하고 실행하지 않는다.
 
 ## 6. 배포 검증
+
+채팅 스트리밍은 `stream:true`로 요청해 `start` 다음에 여러 `delta`, 마지막에 정확히 한 개의 `final` 이벤트가 오는지 확인한다. `curl -N`은 응답 버퍼링을 끄므로 실제 점진 전송 여부도 확인할 수 있다.
+
+```bash
+set -a
+. ./thor-monitor.env
+set +a
+curl -N --max-time 240 -sS -u "thor:$THOR_MONITOR_PASSWORD" \
+  -H 'Content-Type: application/json' \
+  --data '{"run_id":"stream-smoke","stream":true,"messages":[{"role":"user","content":"짧은 문장 다섯 개로 답해줘."}]}' \
+  http://127.0.0.1:8090/api/chat
+```
+
+`delta`에 내부 tool-call JSON이나 `<tool_call>` 마크업이 노출되면 실패다. 도구 실행 결과와 전체 최종 답변은 `final`에서 확인한다.
 
 서버 셸에서 환경 파일을 로드하되 값을 출력하지 않는다.
 
