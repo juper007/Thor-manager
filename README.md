@@ -4,6 +4,8 @@ Real-time monitoring dashboard and AI workspace for NVIDIA Jetson Thor.
 
 Features include system telemetry, Qwen chat, Markdown rendering, image generation/editing, web-enabled agent tools, and an isolated Python Code Interpreter.
 
+Jetson Thor 운영 배포는 [배포 런북](docs/deployment-runbook.md)을 따른다. 서버는 Git checkout이 아니므로 `git pull` 대신 런북의 Git archive 절차를 사용한다.
+
 ## Run locally
 
 ```bash
