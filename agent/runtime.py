@@ -133,21 +133,18 @@ class AgentRuntime:
 
     def _call_model(self,run,conversation,started,phase='planning',on_delta=None):
         self._check_active(run,started); run.emit('model.started',{'phase':phase})
-        completed=queue.Queue(maxsize=1)
+        output=queue.Queue()
         done=threading.Event(); run._model_done=done
-        streamed=[]; emitted=[False]
+        pending=''; blocked=False; delivered=0
+        markers=('<tool_call','<invoke','```','{')
         def receive(delta):
-            streamed.append(delta); prefix=''.join(streamed)
-            if emitted[0]: on_delta(delta); return
-            stripped=prefix.lstrip()
-            if stripped.startswith(('<','{','`')): return
-            if len(prefix)>=16 or stripped:
-                emitted[0]=True; on_delta(prefix)
+            if run.is_cancelled(): raise RunCancelled('run cancelled by user')
+            output.put(('delta',delta))
         def invoke():
             try:
                 call=self.stream_model_call if on_delta is not None and self.stream_model_call is not None else None
-                completed.put((True,call(conversation,receive) if call else self.model_call(conversation)))
-            except Exception as exc: completed.put((False,exc))
+                output.put(('result',True,call(conversation,receive) if call else self.model_call(conversation)))
+            except Exception as exc: output.put(('result',False,exc))
             finally: done.set()
         worker=threading.Thread(target=invoke,daemon=True,name=f'model-{run.run_id[:12]}')
         try: worker.start()
@@ -156,10 +153,25 @@ class AgentRuntime:
         while True:
             self._check_active(run,started)
             remaining=self.total_timeout-(time.monotonic()-started)
-            try: succeeded,value=completed.get(timeout=min(.1,max(.01,remaining)))
+            try: item=output.get(timeout=min(.1,max(.01,remaining)))
             except queue.Empty: continue
+            if item[0]=='delta':
+                if blocked: continue
+                pending+=item[1]; lowered=pending.lower()
+                positions=[lowered.find(marker) for marker in markers if lowered.find(marker)>=0]
+                if positions:
+                    position=min(positions)
+                    if position: on_delta(pending[:position]); delivered+=position
+                    pending=''; blocked=True; continue
+                held=max((size for size in range(1,min(len(pending),max(map(len,markers))-1)+1)
+                          if any(marker.startswith(lowered[-size:]) for marker in markers)),default=0)
+                safe_length=len(pending)-held
+                if safe_length:
+                    on_delta(pending[:safe_length]); delivered+=safe_length; pending=pending[safe_length:]
+                continue
+            _,succeeded,value=item
             if not succeeded: raise value
-            if on_delta is not None and not emitted[0] and not self.parse_calls(value): on_delta(value)
+            if on_delta is not None and not self.parse_calls(value) and delivered<len(value): on_delta(value[delivered:])
             run.emit('model.completed',{'phase':phase,'characters':len(value)}); return value
 
     def _require_final_answer(self,answer,phase):

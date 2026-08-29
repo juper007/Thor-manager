@@ -30,6 +30,8 @@ class UIContractTests(unittest.TestCase):
         self.assertIn('stream:true',self.script)
         self.assertIn("j.type==='delta'",self.script)
         self.assertIn("j.type==='final'",self.script)
+        self.assertIn('requestAnimationFrame',self.script)
+        self.assertIn('cancelAnimationFrame',self.script)
 
     def test_image_studio_contract(self):
         for marker in ('data-image-mode="generate"','data-image-mode="edit"','id="sourceImage"','id="generateImage"','id="imageOutput"'):

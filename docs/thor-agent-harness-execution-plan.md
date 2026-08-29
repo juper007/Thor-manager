@@ -32,7 +32,7 @@
 - [x] 정적 파일 경로 탈출 방지
 - [x] 내부 주소 및 리다이렉트 SSRF 방지
 - [x] AI 요청 동시 실행 제한
-- [x] 서버 회귀 테스트 108개 통과
+- [x] 서버 회귀 테스트 113개 통과
 - [x] Jetson Thor 배포 및 서비스 상태 확인
 - [x] GitHub `juper007/Thor-manager` 저장소 연결
 
@@ -418,3 +418,4 @@
 | 2026-08-29 | 7 | SHA-256 충돌 감지 파일 변경, diff preview, 격리 셸·테스트, 로컬 Git commit 구현 | 자동 테스트 104개, 실제 Qwen 승인 기반 파일 생성·sandbox PASS, 임시 Git commit 통과 | `a5a522d` |
 | 2026-08-29 | 7 보강 | 교체 직전 재검증, read-only test sandbox, 명시적 git_stage와 index hash 고정, commit 오류 처리 | 자동 테스트 105개, 실제 Thor read-only 삭제 거부, edit→stage→commit 및 index 변경 차단 통과 | `eb5f50d` |
 | 2026-08-29 | 8 일부 | 모델 SSE를 NDJSON `delta`로 중계하고 UI에서 Markdown을 점진 렌더링, tool-call 원문 숨김 | 자동 테스트 108개, 실제 Qwen 응답 71개 delta와 단일 final 확인 | `60809a0` |
+| 2026-08-29 | 8 보강 | 스트림 출력 스레드 직렬화, 중간 tool-call 차단, upstream 오류 검증, UI 렌더링 배치 처리 | 자동 테스트 113개, 실제 system_status 도구 호출과 Qwen 스트리밍 통과 | 커밋 예정 |

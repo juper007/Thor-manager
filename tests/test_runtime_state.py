@@ -161,5 +161,33 @@ class AgentStateTests(unittest.TestCase):
         _,answer,_,_=runtime.run_chat([{'role':'user','content':'go'}],'stream-tool',on_delta=chunks.append)
         self.assertEqual(answer,'완료'); self.assertEqual(''.join(chunks),'완료'); self.assertNotIn('tool_call',''.join(chunks))
 
+    def test_streaming_hides_tool_call_after_preamble(self):
+        runtime=make_runtime([]); chunks=[]
+        replies=iter(['확인합니다.\n<tool_call>{"name":"fake","arguments":{"value":"x"}}</tool_call>','최종 답변'])
+        runtime.parse_calls=lambda value: [{'name':'fake','arguments':{'value':'x'}}] if '<tool_call>' in value else []
+        def stream(_,callback):
+            value=next(replies)
+            for part in value: callback(part)
+            return value
+        runtime.stream_model_call=stream
+        _,answer,_,_=runtime.run_chat([{'role':'user','content':'go'}],'stream-preamble',on_delta=chunks.append)
+        self.assertEqual(answer,'최종 답변'); self.assertNotIn('tool_call',''.join(chunks)); self.assertNotIn('{"name"',''.join(chunks))
+
+    def test_streaming_callback_runs_on_request_thread_and_stops_after_cancel(self):
+        produced=threading.Event(); delivered=threading.Event(); release=threading.Event(); chunks=[]; caught=[]; callback_threads=[]
+        runtime=make_runtime([])
+        def stream(_,callback):
+            callback('첫'); produced.set(); release.wait(2); callback('늦은 토큰'); return '첫늦은 토큰'
+        runtime.stream_model_call=stream
+        def collect(value): chunks.append(value); callback_threads.append(threading.current_thread().name); delivered.set()
+        request_thread=threading.Thread(target=lambda:self._capture_stream(runtime,caught,collect),name='request-thread')
+        request_thread.start(); self.assertTrue(produced.wait(1)); self.assertTrue(delivered.wait(1)); runtime.cancel('stream-cancel'); request_thread.join(1); release.set()
+        self.assertFalse(request_thread.is_alive()); self.assertIsInstance(caught[0],RunCancelled)
+        self.assertEqual(''.join(chunks),'첫'); self.assertEqual(callback_threads,['request-thread'])
+
+    def _capture_stream(self,runtime,caught,callback):
+        try: runtime.run_chat([{'role':'user','content':'go'}],'stream-cancel',on_delta=callback)
+        except Exception as exc: caught.append(exc)
+
 
 if __name__=='__main__': unittest.main()

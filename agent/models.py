@@ -21,13 +21,21 @@ def edge_chat(messages,max_tokens=4096,on_delta=None):
     with urllib.request.urlopen(request,timeout=900) as response:
         if on_delta is None:
             result=json.loads(response.read()); return result.get('choices',[{}])[0].get('message',{}).get('content','')
-        chunks=[]
+        chunks=[]; done=False; received=False
         for raw in response:
             line=raw.decode('utf-8',errors='replace').strip()
             if not line.startswith('data:'): continue
             data=line[5:].strip()
-            if data=='[DONE]': break
-            try: delta=json.loads(data).get('choices',[{}])[0].get('delta',{}).get('content') or ''
-            except json.JSONDecodeError: continue
+            if data=='[DONE]': done=True; break
+            try: event=json.loads(data)
+            except json.JSONDecodeError as exc: raise RuntimeError('Edge LLM returned malformed streaming JSON') from exc
+            if event.get('error'):
+                detail=event['error']; message=detail.get('message') if isinstance(detail,dict) else str(detail)
+                raise RuntimeError('Edge LLM streaming error: '+str(message))
+            choices=event.get('choices') or []
+            if not choices: continue
+            received=True; delta=choices[0].get('delta',{}).get('content') or ''
             if delta: chunks.append(delta); on_delta(delta)
+        if not done: raise RuntimeError('Edge LLM stream ended before [DONE]')
+        if not received: raise RuntimeError('Edge LLM stream contained no choices')
         return ''.join(chunks)
