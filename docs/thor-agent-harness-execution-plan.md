@@ -414,4 +414,4 @@
 | 2026-08-28 | 5 보강 | 지침 링크·Git diff 비밀 노출 차단, Workspace 상태 격리, 검색 스트리밍 제한과 파일 직접 검색 | 자동 테스트 85개, 실제 Qwen workspace_open·file_search·file_read 통과 | `9e72f15` |
 | 2026-08-29 | 6 | 위험도별 Permission Engine, 승인 대기·허용·거부·만료, 범위별 grant, API와 SQLite 기록 구현 | 자동 테스트 94개, 스키마 v2, 실제 Qwen python_execute 일회 승인 전 차단·승인 후 실행 통과 | `3c3d0d1` |
 | 2026-08-29 | 6 보강 | 승인 대기 슬롯 반환, 결정·grant 원자화, 메모리 정리, run 단위 거부, 영구 grant upsert·철회 구현 | 자동 테스트 99개, 스키마 v3, 승인 대기 중 별도 Qwen 채팅 및 승인 후 실행 통과 | `5b495a6` |
-| 2026-08-29 | 7 | SHA-256 충돌 감지 파일 변경, diff preview, 격리 셸·테스트, 로컬 Git commit 구현 | 자동 테스트 104개, 실제 Qwen 승인 기반 파일 생성·sandbox PASS, 임시 Git commit 통과 | 커밋 예정 |
+| 2026-08-29 | 7 | SHA-256 충돌 감지 파일 변경, diff preview, 격리 셸·테스트, 로컬 Git commit 구현 | 자동 테스트 104개, 실제 Qwen 승인 기반 파일 생성·sandbox PASS, 임시 Git commit 통과 | `a5a522d` |
