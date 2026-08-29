@@ -25,7 +25,7 @@ class StorageTests(unittest.TestCase):
 
     def test_migration_can_upgrade_rollback_and_upgrade_again(self):
         with self.store.connect() as db:
-            self.assertEqual(db.execute('SELECT MAX(version) FROM schema_migrations').fetchone()[0],1)
+            self.assertEqual(db.execute('SELECT MAX(version) FROM schema_migrations').fetchone()[0],2)
             self.assertIsNotNone(db.execute("SELECT name FROM sqlite_master WHERE name='sessions'").fetchone())
 
     def test_failed_migration_rolls_back_schema_and_version(self):
@@ -39,7 +39,7 @@ class StorageTests(unittest.TestCase):
         self.store.migrate(0)
         with self.store.connect() as db:
             self.assertIsNone(db.execute("SELECT name FROM sqlite_master WHERE name='sessions'").fetchone())
-        self.store.migrate(1)
+        self.store.migrate(2)
         with self.store.connect() as db:
             self.assertIsNotNone(db.execute("SELECT name FROM sqlite_master WHERE name='sessions'").fetchone())
 
@@ -61,6 +61,18 @@ class StorageTests(unittest.TestCase):
         restored=SessionStore(self.path).get_session('interrupted')
         self.assertEqual(restored['state'],'failed'); self.assertIn('server restarted',restored['error'])
         self.assertEqual(self.store.resumable_messages('interrupted'),[{'role':'user','content':'continue this'}])
+
+    def test_interrupted_permission_is_cancelled_and_summary_is_redacted(self):
+        now=time.time(); snapshot={'run_id':'permission-run','state':'awaiting_approval','created_at':now,'updated_at':now,'iterations':1,'tool_calls':1,'error':None,'events':[]}
+        self.store.create_session(snapshot,[{'role':'user','content':'run'}])
+        approval={'approval_id':'a'*32,'run_id':'permission-run','tool_name':'python_execute','risk_level':'elevated','arguments_hash':'hash',
+            'arguments':{'code':'token=secret-value'},'summary':'python_execute: token=secret-value','status':'pending','scope':None,
+            'created_at':now,'expires_at':now+300,'decided_at':None}
+        self.store.create_permission_request(approval)
+        saved=self.store.get_permission_request('a'*32)
+        self.assertNotIn('secret-value',str(saved))
+        self.store.recover_interrupted()
+        self.assertEqual(self.store.get_permission_request('a'*32)['status'],'cancelled')
 
     def test_cleanup_keeps_recent_sessions(self):
         old=time.time()-40*86400

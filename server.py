@@ -5,6 +5,7 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from agent import models
 from agent.runtime import AgentRuntime,RunCancelled,RunLimitError,ServiceBusy,validate_messages,validate_run_id
+from agent.permissions import PermissionEngine
 from storage import SessionStore
 import agent_tools
 
@@ -28,6 +29,7 @@ SESSION_DB = Path(os.environ.get('THOR_SESSION_DB',str(ROOT/'data'/'sessions.db'
 session_store = SessionStore(SESSION_DB)
 session_store.recover_interrupted()
 session_store.cleanup(positive_int_env('THOR_SESSION_MAX_AGE_DAYS',30),positive_int_env('THOR_SESSION_KEEP_RECENT',100))
+permission_engine=PermissionEngine(session_store,positive_int_env('THOR_APPROVAL_TTL_SECONDS',300))
 
 def image_api_key():
     key = os.environ.get('THOR_IMAGE_API_KEY', '')
@@ -55,6 +57,7 @@ runtime=AgentRuntime(
     lambda text: agent_tools.TOOL_CALL_RE.sub('',text).strip(),
     AI_CONCURRENCY,
     session_store=session_store,
+    permission_engine=permission_engine,
 )
 
 
@@ -172,6 +175,14 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_error(404); return
         if route == '/api/chat/models':
             body=b'[{"name":"engine-64k","size":0,"context_length":64000}]'; self.send_response(200); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body); return
+        if route == '/api/chat/approvals':
+            query=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            run_id=query.get('run_id',[None])[0]; status=query.get('status',[None])[0]
+            if run_id is not None:
+                try: run_id=validate_run_id(run_id)
+                except ValueError: self.send_error(400); return
+            if status not in (None,'pending','allowed','denied','expired','cancelled'): self.send_error(400); return
+            json_response(self,200,{'approvals':permission_engine.list(run_id,status)}); return
         if route == '/api/chat/sessions':
             query=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             try: rows=session_store.list_sessions(query.get('limit',['50'])[0],query.get('offset',['0'])[0])
@@ -214,6 +225,16 @@ class Handler(SimpleHTTPRequestHandler):
                 body=json.dumps(snapshot,ensure_ascii=False).encode(); self.send_response(200); self.send_header('Content-Type','application/json'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
             except ValueError as e:
                 body=json.dumps({'error':str(e)}).encode(); self.send_response(400); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body)
+            return
+        if route.startswith('/api/chat/approvals/'):
+            approval_id=urllib.parse.unquote(route.rsplit('/',1)[-1])
+            if not re.fullmatch(r'[0-9a-f]{32}',approval_id): self.send_error(400); return
+            try:
+                incoming=self.read_json_body(4096)
+                approval=permission_engine.decide(approval_id,incoming.get('decision'),incoming.get('scope','once'))
+                json_response(self,200,approval)
+            except KeyError: self.send_error(404)
+            except ValueError as e: json_response(self,409,{'error':str(e)})
             return
         if route.startswith('/api/chat/sessions/') and route.endswith('/resume'):
             run_id=urllib.parse.unquote(route.split('/')[-2])

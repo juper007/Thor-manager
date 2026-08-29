@@ -79,6 +79,46 @@ class SessionStore:
                 run_id,sequence,result.get('name',''),redacted_json(result.get('arguments',{})),redacted_json(result.get('result')),
                 result.get('status','unknown'),redact(result.get('error')),result.get('error_code'),result.get('seconds'),time.time()))
 
+    def create_permission_request(self,approval):
+        with self.connect() as db:
+            db.execute('INSERT INTO permission_requests VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',(
+                approval['approval_id'],approval['run_id'],approval['tool_name'],approval['risk_level'],approval['arguments_hash'],
+                redacted_json(approval['arguments']),redact(approval['summary']),approval['status'],approval.get('scope'),approval['created_at'],approval['expires_at'],approval.get('decided_at')))
+
+    def decide_permission(self,approval_id,status,scope,decided_at):
+        with self.connect() as db:
+            cursor=db.execute("UPDATE permission_requests SET status=?,scope=?,decided_at=? WHERE approval_id=? AND status='pending'",(status,scope,decided_at,approval_id))
+            if cursor.rowcount!=1: raise ValueError('approval is no longer pending')
+
+    def get_permission_request(self,approval_id):
+        with self.connect() as db:
+            row=db.execute('SELECT * FROM permission_requests WHERE approval_id=?',(approval_id,)).fetchone()
+        if row is None: return None
+        result=dict(row); result['arguments']=json.loads(result.pop('arguments_json')); return result
+
+    def list_permission_requests(self,run_id=None,status=None):
+        sql='SELECT * FROM permission_requests'; clauses=[]; params=[]
+        if run_id: clauses.append('run_id=?'); params.append(run_id)
+        if status: clauses.append('status=?'); params.append(status)
+        if clauses: sql+=' WHERE '+' AND '.join(clauses)
+        sql+=' ORDER BY created_at DESC LIMIT 100'
+        with self.connect() as db: rows=[dict(row) for row in db.execute(sql,params)]
+        for row in rows: row['arguments']=json.loads(row.pop('arguments_json'))
+        return rows
+
+    def save_permission_grant(self,scope,run_id,tool_name,risk_level):
+        stored_run=run_id if scope=='session' else None
+        with self.connect() as db:
+            db.execute('INSERT OR REPLACE INTO permission_grants(scope,run_id,tool_name,risk_level,created_at,expires_at) VALUES (?,?,?,?,?,?)',(
+                scope,stored_run,tool_name,risk_level,time.time(),None))
+
+    def find_permission_grant(self,run_id,tool_name,risk_level):
+        now=time.time()
+        with self.connect() as db:
+            row=db.execute("SELECT * FROM permission_grants WHERE tool_name=? AND risk_level=? AND (scope='always_tool' OR (scope='session' AND run_id=?)) AND (expires_at IS NULL OR expires_at>?) ORDER BY CASE scope WHEN 'session' THEN 0 ELSE 1 END LIMIT 1",
+                (tool_name,risk_level,run_id,now)).fetchone()
+        return dict(row) if row else None
+
     def complete_session(self,snapshot,answer):
         now=time.time()
         with self.connect() as db:
@@ -114,6 +154,7 @@ class SessionStore:
         with self.connect() as db:
             rows=[row[0] for row in db.execute("SELECT run_id FROM sessions WHERE state NOT IN ('completed','failed','cancelled')")]
             db.executemany("UPDATE sessions SET state='failed',error=?,updated_at=? WHERE run_id=?",[(message,now,run_id) for run_id in rows])
+            db.execute("UPDATE permission_requests SET status='cancelled',decided_at=? WHERE status='pending'",(now,))
         return rows
 
     def resumable_messages(self,run_id):

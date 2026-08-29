@@ -107,6 +107,20 @@ class HandlerIntegrationTests(unittest.TestCase):
             status,_,payload=app.request('POST','/api/chat/cancel',body,headers)
         self.assertEqual(status,400); self.assertIn('required',json.loads(payload)['error'])
 
+    def test_permission_list_and_decision_endpoints(self):
+        approval_id='a'*32; engine=mock.Mock()
+        engine.list.return_value=[{'approval_id':approval_id,'status':'pending'}]
+        engine.decide.return_value={'approval_id':approval_id,'status':'allowed','scope':'once'}
+        body=json.dumps({'decision':'allow','scope':'once'}).encode()
+        headers={'Authorization':basic(),'Content-Type':'application/json','Content-Length':str(len(body))}
+        with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),mock.patch.object(server,'permission_engine',engine),RunningServer() as app:
+            list_status,_,list_body=app.request('GET','/api/chat/approvals?run_id=approval-run&status=pending',headers={'Authorization':basic()})
+            decide_status,_,decide_body=app.request('POST','/api/chat/approvals/'+approval_id,body,headers)
+        self.assertEqual((list_status,decide_status),(200,200))
+        self.assertEqual(json.loads(list_body)['approvals'][0]['status'],'pending')
+        self.assertEqual(json.loads(decide_body)['status'],'allowed')
+        engine.list.assert_called_once_with('approval-run','pending'); engine.decide.assert_called_once_with(approval_id,'allow','once')
+
     def test_persisted_session_list_and_detail_endpoints(self):
         with tempfile.TemporaryDirectory() as directory:
             store=SessionStore(Path(directory)/'sessions.db'); now=1.0

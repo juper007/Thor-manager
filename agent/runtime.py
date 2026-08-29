@@ -42,12 +42,12 @@ def validate_messages(value):
 
 class AgentRuntime:
     def __init__(self,root,model_call,registry,parse_calls,skill_loader,strip_tool_calls,concurrency=1,
-                 max_iterations=5,max_tool_calls=8,total_timeout=900,recent_run_limit=100,session_store=None):
+                 max_iterations=5,max_tool_calls=8,total_timeout=900,recent_run_limit=100,session_store=None,permission_engine=None):
         self.root=root; self.model_call=model_call; self.registry=registry; self.parse_calls=parse_calls
         self.skill_loader=skill_loader; self.strip_tool_calls=strip_tool_calls
         self.max_iterations=max(1,max_iterations); self.max_tool_calls=max(1,max_tool_calls)
         self.total_timeout=max(.01,total_timeout); self.recent_run_limit=max(1,recent_run_limit)
-        self.session_store=session_store
+        self.session_store=session_store; self.permission_engine=permission_engine
         self.gate=threading.BoundedSemaphore(max(1,concurrency))
         self._runs=OrderedDict(); self._runs_lock=threading.Lock()
 
@@ -168,7 +168,14 @@ class AgentRuntime:
                     event=tool_cache[cache_key]; duplicate_count+=1; run.emit('tool.reused',{'name':call['name']})
                 else:
                     run.increment_tool_calls(); run.emit('tool.started',{'name':call['name'],'arguments':call['arguments']})
-                    event=self.registry.execute(call['name'],call['arguments'])
+                    permission=None; spec=self.registry.get(call['name']) if self.permission_engine is not None and hasattr(self.registry,'get') else None
+                    if spec is not None:
+                        permission=self.permission_engine.authorize(run,spec,call['arguments'],run.is_cancelled,max(.01,self.total_timeout-(time.monotonic()-started)))
+                    self._check_active(run,started)
+                    if permission is not None and not permission['allowed']:
+                        event={'name':call['name'],'arguments':call['arguments'],'status':'error','result':None,
+                            'error':permission['error'],'error_code':permission['error_code'],'seconds':0,'truncated':False}
+                    else: event=self.registry.execute(call['name'],call['arguments'])
                     tool_cache[cache_key]=event; events.append(event)
                     if self.session_store is not None: self.session_store.record_tool_execution(run.run_id,len(events),event)
                     run.emit('tool.completed',{'name':call['name'],'status':event.get('status'),'error_code':event.get('error_code'),'seconds':event.get('seconds')})

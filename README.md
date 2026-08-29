@@ -32,6 +32,7 @@ THOR_AI_CONCURRENCY=1
 THOR_SESSION_DB=/home/juper007/thor-monitor/data/sessions.db
 THOR_SESSION_MAX_AGE_DAYS=30
 THOR_SESSION_KEEP_RECENT=100
+THOR_APPROVAL_TTL_SECONDS=300
 THOR_WORKSPACE_ROOTS=/home/juper007/thor-monitor
 ```
 
@@ -65,9 +66,13 @@ Run state, messages, events, and tool results are persisted in SQLite. The defau
 GET  /api/chat/sessions?limit=50&offset=0
 GET  /api/chat/sessions/{run_id}
 POST /api/chat/sessions/{run_id}/resume   {"run_id":"optional-new-run-id"}
+GET  /api/chat/approvals?run_id={run_id}&status=pending
+POST /api/chat/approvals/{approval_id}    {"decision":"allow|deny","scope":"once|session|always_tool"}
 ```
 
 Only failed or cancelled sessions can be resumed. Retention defaults to 30 days while preserving the 100 most recently updated sessions. Credential-like fields and inline secrets are redacted before storage.
+
+Read tools run automatically. Safe-write, elevated, and destructive tools wait for an authenticated approval before execution. Approval requests expire after `THOR_APPROVAL_TTL_SECONDS`; the default is 300 seconds. The engine records the exact argument hash and refuses execution if arguments change after approval. `once` applies to one request, `session` grants the same tool for that run, and `always_tool` persists for future runs.
 
 ## Read-only workspace tools
 
