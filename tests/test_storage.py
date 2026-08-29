@@ -25,7 +25,7 @@ class StorageTests(unittest.TestCase):
 
     def test_migration_can_upgrade_rollback_and_upgrade_again(self):
         with self.store.connect() as db:
-            self.assertEqual(db.execute('SELECT MAX(version) FROM schema_migrations').fetchone()[0],2)
+            self.assertEqual(db.execute('SELECT MAX(version) FROM schema_migrations').fetchone()[0],3)
             self.assertIsNotNone(db.execute("SELECT name FROM sqlite_master WHERE name='sessions'").fetchone())
 
     def test_failed_migration_rolls_back_schema_and_version(self):
@@ -39,7 +39,7 @@ class StorageTests(unittest.TestCase):
         self.store.migrate(0)
         with self.store.connect() as db:
             self.assertIsNone(db.execute("SELECT name FROM sqlite_master WHERE name='sessions'").fetchone())
-        self.store.migrate(2)
+        self.store.migrate(3)
         with self.store.connect() as db:
             self.assertIsNotNone(db.execute("SELECT name FROM sqlite_master WHERE name='sessions'").fetchone())
 
@@ -73,6 +73,26 @@ class StorageTests(unittest.TestCase):
         self.assertNotIn('secret-value',str(saved))
         self.store.recover_interrupted()
         self.assertEqual(self.store.get_permission_request('a'*32)['status'],'cancelled')
+
+    def test_always_grant_is_upserted_and_can_be_revoked(self):
+        self.store.save_permission_grant('always_tool','first','python_execute','elevated')
+        self.store.save_permission_grant('always_tool','second','python_execute','elevated')
+        grants=self.store.list_permission_grants()
+        self.assertEqual(len(grants),1); self.assertIsNone(grants[0]['run_id'])
+        self.assertTrue(self.store.revoke_permission_grant(grants[0]['id']))
+        self.assertEqual(self.store.list_permission_grants(),[])
+
+    def test_permission_decision_and_grant_are_atomic(self):
+        now=time.time(); snapshot={'run_id':'atomic-permission','state':'awaiting_approval','created_at':now,'updated_at':now,'iterations':1,'tool_calls':1,'error':None,'events':[]}
+        self.store.create_session(snapshot,[{'role':'user','content':'run'}])
+        approval={'approval_id':'b'*32,'run_id':'atomic-permission','tool_name':'python_execute','risk_level':'elevated','arguments_hash':'hash',
+            'arguments':{'code':'print(1)'},'summary':'python_execute','status':'pending','scope':None,'created_at':now,'expires_at':now+300,'decided_at':None}
+        self.store.create_permission_request(approval)
+        with self.store.connect() as db:
+            db.execute("CREATE TRIGGER reject_grant BEFORE INSERT ON permission_grants BEGIN SELECT RAISE(ABORT,'reject'); END")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.store.apply_permission_decision('b'*32,'allowed','always_tool',time.time(),'atomic-permission','python_execute','elevated')
+        self.assertEqual(self.store.get_permission_request('b'*32)['status'],'pending')
 
     def test_cleanup_keeps_recent_sessions(self):
         old=time.time()-40*86400

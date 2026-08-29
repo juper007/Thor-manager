@@ -93,9 +93,18 @@ class AgentRuntime:
         if not self.gate.acquire(blocking=False):
             self._terminate(run,RunState.FAILED,'AI service is busy')
             raise ServiceBusy('AI service is busy; try again after the current request finishes')
+        capacity_held=[True]
         started=time.monotonic()
+        def release_capacity():
+            if capacity_held[0]: self.gate.release(); capacity_held[0]=False
+        def reacquire_capacity():
+            while not capacity_held[0]:
+                self._check_active(run,started)
+                remaining=self.total_timeout-(time.monotonic()-started)
+                if remaining<=0: raise RunTimeout(f'run exceeded {self.total_timeout} second limit')
+                if self.gate.acquire(timeout=min(.1,remaining)): capacity_held[0]=True
         try:
-            answer,events,sources=self._run(run,messages,started)
+            answer,events,sources=self._run(run,messages,started,release_capacity,reacquire_capacity)
             if self.session_store is not None: self.session_store.complete_session(run.snapshot(),answer)
             return run,answer,events,sources
         except RunCancelled as exc:
@@ -103,10 +112,11 @@ class AgentRuntime:
         except Exception as exc:
             self._terminate(run,RunState.FAILED,str(exc)); raise
         finally:
+            if self.permission_engine is not None: self.permission_engine.finish_run(run.run_id)
             model_done=run._model_done
-            if model_done is not None and not model_done.is_set():
+            if capacity_held[0] and model_done is not None and not model_done.is_set():
                 threading.Thread(target=self._release_when_done,args=(model_done,),daemon=True,name=f'model-release-{run.run_id[:12]}').start()
-            else: self.gate.release()
+            elif capacity_held[0]: self.gate.release()
             self._prune_runs()
 
     def _release_when_done(self,done):
@@ -146,7 +156,7 @@ class AgentRuntime:
             raise RunLimitError(f'{phase} produced another tool call')
         return answer
 
-    def _run(self,run,messages,started):
+    def _run(self,run,messages,started,release_capacity=lambda:None,reacquire_capacity=lambda:None):
         conversation=[{'role':'system','content':self.skill_loader(self.root)},*messages]
         events=[]; sources=[]; answer=''; tool_cache={}
         run.transition(RunState.PLANNING)
@@ -170,7 +180,8 @@ class AgentRuntime:
                     run.increment_tool_calls(); run.emit('tool.started',{'name':call['name'],'arguments':call['arguments']})
                     permission=None; spec=self.registry.get(call['name']) if self.permission_engine is not None and hasattr(self.registry,'get') else None
                     if spec is not None:
-                        permission=self.permission_engine.authorize(run,spec,call['arguments'],run.is_cancelled,max(.01,self.total_timeout-(time.monotonic()-started)))
+                        permission=self.permission_engine.authorize(run,spec,call['arguments'],run.is_cancelled,
+                            max(.01,self.total_timeout-(time.monotonic()-started)),release_capacity,reacquire_capacity)
                     self._check_active(run,started)
                     if permission is not None and not permission['allowed']:
                         event={'name':call['name'],'arguments':call['arguments'],'status':'error','result':None,

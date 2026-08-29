@@ -25,16 +25,19 @@ def summarize(tool_name,risk_level,arguments):
 class PermissionEngine:
     def __init__(self,store=None,ttl_seconds=300):
         self.store=store; self.ttl_seconds=max(1,int(ttl_seconds))
-        self._pending={}; self._condition=threading.Condition()
+        self._pending={}; self._denied={}; self._condition=threading.Condition()
 
     def _grant(self,run_id,tool_name,risk_level):
         if self.store is None: return None
         return self.store.find_permission_grant(run_id,tool_name,risk_level)
 
-    def authorize(self,run,spec,arguments,cancelled=lambda:False,timeout=None):
+    def authorize(self,run,spec,arguments,cancelled=lambda:False,timeout=None,on_wait=None,on_resume=None):
         risk=spec.risk_level.value
         if spec.risk_level==RiskLevel.READ:
             return {'allowed':True,'source':'read_policy'}
+        with self._condition:
+            if spec.name in self._denied.get(run.run_id,set()):
+                return {'allowed':False,'error_code':'permission_denied','error':'tool permission denied for this run'}
         grant=self._grant(run.run_id,spec.name,risk)
         if grant: return {'allowed':True,'source':grant['scope']}
         now=time.time(); approval={
@@ -47,6 +50,7 @@ class PermissionEngine:
         if self.store is not None: self.store.create_permission_request(approval)
         run.transition('awaiting_approval',f'{spec.name} requires approval')
         run.emit('permission.requested',{key:approval[key] for key in ('approval_id','tool_name','risk_level','summary','expires_at')})
+        if on_wait is not None: on_wait()
         wait_seconds=max(0,approval['expires_at']-time.time())
         if timeout is not None: wait_seconds=min(wait_seconds,max(0,timeout))
         deadline=time.monotonic()+wait_seconds
@@ -60,6 +64,12 @@ class PermissionEngine:
                 self._condition.wait(min(.1,remaining))
         if self.store is not None and approval['status'] in ('expired','cancelled'):
             self.store.decide_permission(approval['approval_id'],approval['status'],None,approval.get('decided_at') or time.time())
+        try:
+            if not cancelled() and on_resume is not None: on_resume()
+        finally:
+            with self._condition:
+                self._pending.pop(approval['approval_id'],None)
+                if approval['status']=='denied': self._denied.setdefault(run.run_id,set()).add(spec.name)
         if cancelled(): return {'allowed':False,'error_code':'cancelled','error':'run cancelled while awaiting approval','approval':approval}
         run.transition('executing',f'permission {approval["status"]}')
         run.emit('permission.decided',{'approval_id':approval['approval_id'],'status':approval['status'],'scope':approval.get('scope')})
@@ -68,6 +78,12 @@ class PermissionEngine:
         if approval['arguments_hash']!=arguments_hash(arguments):
             return {'allowed':False,'error_code':'permission_arguments_changed','error':'tool arguments changed after approval','approval':approval}
         return {'allowed':True,'source':approval.get('scope') or 'once','approval':approval}
+
+    def finish_run(self,run_id):
+        with self._condition:
+            self._denied.pop(run_id,None)
+            stale=[key for key,value in self._pending.items() if value['run_id']==run_id]
+            for key in stale: self._pending.pop(key,None)
 
     def decide(self,approval_id,decision,scope='once'):
         if decision not in DECISIONS: raise ValueError('decision must be allow or deny')
@@ -79,9 +95,8 @@ class PermissionEngine:
             if approval['expires_at']<=time.time(): raise ValueError('approval has expired')
             status='allowed' if decision=='allow' else 'denied'; selected_scope=scope if decision=='allow' else None; decided_at=time.time()
             if self.store is not None:
-                self.store.decide_permission(approval_id,status,selected_scope,decided_at)
-                if decision=='allow' and scope in ('session','always_tool'):
-                    self.store.save_permission_grant(scope,approval['run_id'],approval['tool_name'],approval['risk_level'])
+                self.store.apply_permission_decision(approval_id,status,selected_scope,decided_at,
+                    approval['run_id'],approval['tool_name'],approval['risk_level'])
             approval['status']=status; approval['scope']=selected_scope; approval['decided_at']=decided_at
             self._pending[approval_id]=approval; self._condition.notify_all()
         return approval
@@ -93,3 +108,9 @@ class PermissionEngine:
         if run_id: rows=[row for row in rows if row['run_id']==run_id]
         if status: rows=[row for row in rows if row['status']==status]
         return rows
+
+    def grants(self): return self.store.list_permission_grants() if self.store is not None else []
+
+    def revoke(self,grant_id):
+        if self.store is None: return False
+        return self.store.revoke_permission_grant(grant_id)

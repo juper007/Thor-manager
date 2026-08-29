@@ -48,6 +48,7 @@ class PermissionTests(unittest.TestCase):
         self.assertEqual(calls,[]); self.assertEqual(runtime.get_run('allow-once').state.value,'awaiting_approval')
         engine.decide(approval['approval_id'],'allow','once'); thread.join(2)
         self.assertFalse(thread.is_alive()); self.assertEqual(calls,[{'value':'original'}]); self.assertEqual(result[0][1],'done')
+        self.assertNotIn(approval['approval_id'],engine._pending)
 
     def test_read_policy_never_creates_an_approval(self):
         engine=PermissionEngine(self.store); run=AgentRun('read-only')
@@ -68,6 +69,26 @@ class PermissionTests(unittest.TestCase):
         thread=threading.Thread(target=lambda:result.append(runtime.run_chat([{'role':'user','content':'go'}],'deny')))
         thread.start(); approval=self.wait_pending(engine,'deny'); engine.decide(approval['approval_id'],'deny'); thread.join(2)
         self.assertEqual(calls,[]); self.assertEqual(result[0][2][0]['error_code'],'permission_denied')
+
+    def test_denied_tool_cannot_request_again_with_changed_arguments(self):
+        calls=[]; runtime,engine=self.runtime(['tool','tool-changed','finished'],calls); result=[]
+        runtime.parse_calls=lambda text: ([{'name':'danger','arguments':{'value':'original'}}] if text=='tool' else
+            ([{'name':'danger','arguments':{'value':'changed'}}] if text=='tool-changed' else []))
+        thread=threading.Thread(target=lambda:result.append(runtime.run_chat([{'role':'user','content':'go'}],'deny-retry')))
+        thread.start(); approval=self.wait_pending(engine,'deny-retry'); engine.decide(approval['approval_id'],'deny'); thread.join(2)
+        self.assertFalse(thread.is_alive()); self.assertEqual(calls,[])
+        self.assertEqual(len(self.store.list_permission_requests('deny-retry')),1)
+        self.assertEqual([event['error_code'] for event in result[0][2]],['permission_denied','permission_denied'])
+
+    def test_approval_wait_releases_runtime_capacity(self):
+        calls=[]; runtime,engine=self.runtime([],calls); first=[]
+        replies=iter(['tool','other answer','first answer']); runtime.model_call=lambda _:next(replies)
+        thread=threading.Thread(target=lambda:first.append(runtime.run_chat([{'role':'user','content':'first'}],'waiting')))
+        thread.start(); approval=self.wait_pending(engine,'waiting')
+        second=runtime.run_chat([{'role':'user','content':'second'}],'other')
+        self.assertEqual(second[1],'other answer')
+        engine.decide(approval['approval_id'],'allow'); thread.join(2)
+        self.assertFalse(thread.is_alive()); self.assertEqual(first[0][1],'first answer')
 
     def test_argument_change_after_approval_is_rejected(self):
         calls=[]; runtime,engine=self.runtime(['tool','changed arguments rejected'],calls); result=[]

@@ -183,6 +183,8 @@ class Handler(SimpleHTTPRequestHandler):
                 except ValueError: self.send_error(400); return
             if status not in (None,'pending','allowed','denied','expired','cancelled'): self.send_error(400); return
             json_response(self,200,{'approvals':permission_engine.list(run_id,status)}); return
+        if route == '/api/chat/permission-grants':
+            json_response(self,200,{'grants':permission_engine.grants()}); return
         if route == '/api/chat/sessions':
             query=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             try: rows=session_store.list_sessions(query.get('limit',['50'])[0],query.get('offset',['0'])[0])
@@ -272,6 +274,15 @@ class Handler(SimpleHTTPRequestHandler):
             detail=e.read().decode(errors='replace')[:1000]; body=json.dumps({'error':detail,'done':True}).encode(); self.send_response(502); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body)
         except Exception as e:
             body=json.dumps({'error':str(e),'done':True}).encode(); self.send_response(502); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body)
+    def do_DELETE(self):
+        if not self.authenticated(): return
+        route=self.path.split('?',1)[0]
+        if not route.startswith('/api/chat/permission-grants/'):
+            self.send_error(404); return
+        value=route.rsplit('/',1)[-1]
+        if not value.isdigit(): self.send_error(400); return
+        if not permission_engine.revoke(int(value)): self.send_error(404); return
+        json_response(self,200,{'revoked':True,'grant_id':int(value)})
     def read_json_body(self,max_bytes):
         length=int(self.headers.get('Content-Length','0'))
         if length <= 0 or length > max_bytes: raise ValueError('invalid request size')

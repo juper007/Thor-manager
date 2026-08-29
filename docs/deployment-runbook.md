@@ -120,7 +120,7 @@ THOR_SESSION_DB="$deploy_test_dir/sessions.db" PYTHONDONTWRITEBYTECODE=1 python3
 rm -rf -- "$deploy_test_dir"
 ```
 
-현재 기준은 전체 테스트 94개 통과다. 한 개라도 실패하면 서비스를 재시작하지 않는다.
+현재 기준은 전체 테스트 99개 통과다. 한 개라도 실패하면 서비스를 재시작하지 않는다.
 
 ## 5. 서비스 재시작
 
@@ -167,7 +167,7 @@ SQLite 마이그레이션 버전을 확인한다.
 python3 -c "import sqlite3; db=sqlite3.connect('data/sessions.db'); print(db.execute('SELECT MAX(version) FROM schema_migrations').fetchone()[0]); db.close()"
 ```
 
-현재 예상 버전은 `2`이다.
+현재 예상 버전은 `3`이다.
 
 읽기 전용 Workspace 도구를 사용할 배포에서는 `thor-monitor.env`에 허용 루트를 명시한다. 여러 루트는 Linux 경로 구분자인 `:`로 구분한다.
 
@@ -188,6 +188,14 @@ curl -fsS -u "thor:$THOR_MONITOR_PASSWORD" -H 'Content-Type: application/json' \
 ```
 
 `scope`은 `once`, `session`, `always_tool` 중 하나다. 운영 환경에서는 영향 범위를 확인한 뒤 가능한 한 `once`를 사용한다.
+
+영구 grant를 확인하고 철회할 수 있다.
+
+```bash
+curl -fsS -u "thor:$THOR_MONITOR_PASSWORD" http://127.0.0.1:8090/api/chat/permission-grants
+curl -fsS -u "thor:$THOR_MONITOR_PASSWORD" -X DELETE \
+  http://127.0.0.1:8090/api/chat/permission-grants/GRANT_ID
+```
 
 실제 Qwen 및 세션 저장을 확인하려면 충돌하지 않는 run ID로 요청한다.
 

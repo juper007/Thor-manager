@@ -121,6 +121,14 @@ class HandlerIntegrationTests(unittest.TestCase):
         self.assertEqual(json.loads(decide_body)['status'],'allowed')
         engine.list.assert_called_once_with('approval-run','pending'); engine.decide.assert_called_once_with(approval_id,'allow','once')
 
+    def test_permission_grant_list_and_revoke_endpoints(self):
+        engine=mock.Mock(); engine.grants.return_value=[{'id':7,'scope':'always_tool'}]; engine.revoke.return_value=True
+        with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),mock.patch.object(server,'permission_engine',engine),RunningServer() as app:
+            list_status,_,list_body=app.request('GET','/api/chat/permission-grants',headers={'Authorization':basic()})
+            delete_status,_,delete_body=app.request('DELETE','/api/chat/permission-grants/7',headers={'Authorization':basic()})
+        self.assertEqual((list_status,delete_status),(200,200)); self.assertEqual(json.loads(list_body)['grants'][0]['id'],7)
+        self.assertTrue(json.loads(delete_body)['revoked']); engine.revoke.assert_called_once_with(7)
+
     def test_persisted_session_list_and_detail_endpoints(self):
         with tempfile.TemporaryDirectory() as directory:
             store=SessionStore(Path(directory)/'sessions.db'); now=1.0

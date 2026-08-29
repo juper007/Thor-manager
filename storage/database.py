@@ -90,6 +90,16 @@ class SessionStore:
             cursor=db.execute("UPDATE permission_requests SET status=?,scope=?,decided_at=? WHERE approval_id=? AND status='pending'",(status,scope,decided_at,approval_id))
             if cursor.rowcount!=1: raise ValueError('approval is no longer pending')
 
+    def apply_permission_decision(self,approval_id,status,scope,decided_at,run_id,tool_name,risk_level):
+        with self.connect() as db:
+            cursor=db.execute("UPDATE permission_requests SET status=?,scope=?,decided_at=? WHERE approval_id=? AND status='pending'",(status,scope,decided_at,approval_id))
+            if cursor.rowcount!=1: raise ValueError('approval is no longer pending')
+            if status=='allowed' and scope in ('session','always_tool'):
+                stored_run=run_id if scope=='session' else None
+                grant_key=f'{scope}:{stored_run or "*"}:{tool_name}:{risk_level}'
+                db.execute('INSERT INTO permission_grants(grant_key,scope,run_id,tool_name,risk_level,created_at,expires_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(grant_key) DO UPDATE SET created_at=excluded.created_at,expires_at=excluded.expires_at',(
+                    grant_key,scope,stored_run,tool_name,risk_level,time.time(),None))
+
     def get_permission_request(self,approval_id):
         with self.connect() as db:
             row=db.execute('SELECT * FROM permission_requests WHERE approval_id=?',(approval_id,)).fetchone()
@@ -108,9 +118,18 @@ class SessionStore:
 
     def save_permission_grant(self,scope,run_id,tool_name,risk_level):
         stored_run=run_id if scope=='session' else None
+        grant_key=f'{scope}:{stored_run or "*"}:{tool_name}:{risk_level}'
         with self.connect() as db:
-            db.execute('INSERT OR REPLACE INTO permission_grants(scope,run_id,tool_name,risk_level,created_at,expires_at) VALUES (?,?,?,?,?,?)',(
-                scope,stored_run,tool_name,risk_level,time.time(),None))
+            db.execute('INSERT INTO permission_grants(grant_key,scope,run_id,tool_name,risk_level,created_at,expires_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(grant_key) DO UPDATE SET created_at=excluded.created_at,expires_at=excluded.expires_at',(
+                grant_key,scope,stored_run,tool_name,risk_level,time.time(),None))
+
+    def list_permission_grants(self):
+        with self.connect() as db: return [dict(row) for row in db.execute('SELECT * FROM permission_grants ORDER BY created_at DESC')]
+
+    def revoke_permission_grant(self,grant_id):
+        with self.connect() as db:
+            cursor=db.execute('DELETE FROM permission_grants WHERE id=?',(int(grant_id),))
+            return cursor.rowcount==1
 
     def find_permission_grant(self,run_id,tool_name,risk_level):
         now=time.time()
