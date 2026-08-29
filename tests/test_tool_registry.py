@@ -79,12 +79,14 @@ class ToolRegistryTests(unittest.TestCase):
     def test_builtin_registry_catalog(self):
         registry=build_registry()
         names=set(registry.names()); catalog=registry.model_catalog()
-        self.assertEqual(names,{'web_search','read_webpage','calculator','current_time','system_status','python_execute','workspace_open','file_list','file_read','file_search','git_status','git_diff'})
+        self.assertEqual(names,{'web_search','read_webpage','calculator','current_time','system_status','python_execute','workspace_open','file_list','file_read','file_search','git_status','git_diff','file_write','file_patch','shell_execute','test_run','git_commit'})
         python_entry=next(item for item in catalog if item['name']=='python_execute')
         self.assertEqual(python_entry['risk_level'],RiskLevel.ELEVATED.value)
         for name in ('workspace_open','file_list','file_read','file_search','git_status','git_diff'):
             self.assertIn(name,names)
             self.assertEqual(next(item for item in catalog if item['name']==name)['risk_level'],RiskLevel.READ.value)
+        expected={'file_write':RiskLevel.SAFE_WRITE.value,'file_patch':RiskLevel.SAFE_WRITE.value,'test_run':RiskLevel.SAFE_WRITE.value,'shell_execute':RiskLevel.ELEVATED.value,'git_commit':RiskLevel.DESTRUCTIVE.value}
+        for name,risk in expected.items(): self.assertEqual(next(item for item in catalog if item['name']==name)['risk_level'],risk)
         self.assertIn('code',python_entry['input_schema']['required'])
 
     def test_facade_executes_through_default_registry(self):

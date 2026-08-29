@@ -1,5 +1,6 @@
 from tools.base import RiskLevel,ToolSpec
 from tools.calculation import calculator,current_time
+from tools.coding import file_patch,file_write,git_commit,shell_execute,test_run
 from tools.python import python_execute
 from tools.registry import ToolRegistry
 from tools.system import system_status
@@ -72,4 +73,23 @@ def build_registry(workspace=None):
         {**OBJECT,'properties':{**WORKSPACE,'staged':{'type':'boolean'},'path':{'type':'string','maxLength':4096}}},
         lambda args:git_diff(workspace,args),RiskLevel.READ,20,100_000,
     ))
+    change_properties={**WORKSPACE,'path':{'type':'string','minLength':1,'maxLength':4096},'expected_sha256':{'type':'string','minLength':64,'maxLength':64},'apply':{'type':'boolean'}}
+    registry.register(ToolSpec(
+        'file_write','Preview or atomically write a UTF-8 file. Existing files require the SHA-256 returned by file_read or a prior preview.',
+        {**OBJECT,'properties':{**change_properties,'content':{'type':'string','maxLength':256000}},'required':['path','content']},
+        lambda args:file_write(workspace,args),RiskLevel.SAFE_WRITE,10,100_000,
+    ))
+    registry.register(ToolSpec(
+        'file_patch','Preview or atomically apply one exact text replacement; the current file SHA-256 is required.',
+        {**OBJECT,'properties':{**change_properties,'old_text':{'type':'string','minLength':1,'maxLength':50000},'new_text':{'type':'string','maxLength':50000}},'required':['path','expected_sha256','old_text','new_text']},
+        lambda args:file_patch(workspace,args),RiskLevel.SAFE_WRITE,10,100_000,
+    ))
+    command_schema={**OBJECT,'properties':{**WORKSPACE,'command':{'type':'string','minLength':1,'maxLength':4000},'timeout_seconds':{'type':'integer','minimum':1,'maximum':300}},'required':['command']}
+    registry.register(ToolSpec('shell_execute','Run a bounded command inside a network-disabled Docker sandbox mounted to the selected workspace.',command_schema,
+        lambda args:shell_execute(workspace,args),RiskLevel.ELEVATED,310,40_000))
+    registry.register(ToolSpec('test_run','Run a bounded test command inside a network-disabled Docker sandbox and return its exact exit status.',command_schema,
+        lambda args:test_run(workspace,args),RiskLevel.SAFE_WRITE,310,40_000))
+    registry.register(ToolSpec('git_commit','Create a local Git commit from already staged changes. This never pushes.',
+        {**OBJECT,'properties':{**WORKSPACE,'message':{'type':'string','minLength':1,'maxLength':200}},'required':['message']},
+        lambda args:git_commit(workspace,args),RiskLevel.DESTRUCTIVE,70,20_000))
     return registry

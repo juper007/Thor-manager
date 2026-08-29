@@ -1,7 +1,7 @@
 # Thor Agent Harness 실행 계획 및 체크리스트
 
 최종 갱신: 2026-08-28  
-전체 상태: 6단계 완료 / 7단계 시작 전
+전체 상태: 7단계 완료 / 8단계 시작 전
 설계 문서: [`thor-agent-harness-blueprint.md`](thor-agent-harness-blueprint.md)
 
 ## 상태 표기
@@ -32,7 +32,7 @@
 - [x] 정적 파일 경로 탈출 방지
 - [x] 내부 주소 및 리다이렉트 SSRF 방지
 - [x] AI 요청 동시 실행 제한
-- [x] 서버 회귀 테스트 99개 통과
+- [x] 서버 회귀 테스트 104개 통과
 - [x] Jetson Thor 배포 및 서비스 상태 확인
 - [x] GitHub `juper007/Thor-manager` 저장소 연결
 
@@ -47,7 +47,7 @@
 | 4 | SQLite 세션 저장 | 완료 | 재시작 복구·조회·재개까지 Jetson 검증 완료 |
 | 5 | Workspace와 읽기 도구 | 완료 | 안전한 프로젝트 분석 가능 |
 | 6 | Permission Engine | 완료 | 승인 전 위험 작업 실행 불가 |
-| 7 | 파일 수정·셸·테스트·Git | 시작 전 | 버그 수정 후 테스트와 diff 제공 |
+| 7 | 파일 수정·셸·테스트·Git | 완료 | 버그 수정 후 테스트와 diff 제공 |
 | 8 | AI Workspace UI 확장 | 시작 전 | 계획·도구·승인·diff를 UI에서 제어 |
 | 9 | Skills 확장 | 시작 전 | 스킬별 도구와 완료 조건 적용 |
 | 10 | MCP와 고급 기능 | 시작 전 | 선택 기능별 별도 검증 통과 |
@@ -272,28 +272,28 @@
 
 ### To-do
 
-- [ ] `file_patch`
-- [ ] `file_write`
-- [ ] 충돌과 기존 사용자 변경 감지
-- [ ] patch 미리보기
-- [ ] `shell_execute` Docker 격리
-- [ ] 명령 시간·CPU·메모리·PID 제한
-- [ ] 위험 명령 탐지
-- [ ] `test_run`
-- [ ] `git_status`
-- [ ] `git_diff`
-- [ ] `git_commit`
-- [ ] Git worktree 선택 지원
-- [ ] 실패 시 제한된 수정·검증 반복
-- [ ] 최종 변경 요약 생성
+- [x] `file_patch`
+- [x] `file_write`
+- [x] 충돌과 기존 사용자 변경 감지
+- [x] patch 미리보기
+- [x] `shell_execute` Docker 격리
+- [x] 명령 시간·CPU·메모리·PID 제한
+- [x] 위험 명령 탐지
+- [x] `test_run`
+- [x] `git_status`
+- [x] `git_diff`
+- [x] `git_commit`
+- [x] Git worktree 선택 지원
+- [x] 실패 시 제한된 수정·검증 반복
+- [x] 최종 변경 요약 생성
 
 ### 완료 체크
 
-- [ ] 작은 버그 수정 시나리오 통과
-- [ ] 테스트 실패를 감지하고 정확히 보고
-- [ ] 사용자 변경을 덮어쓰지 않음
-- [ ] 최종 diff와 테스트 결과 제공
-- [ ] 승인 없이 커밋·push하지 않음
+- [x] 작은 버그 수정 시나리오 통과
+- [x] 테스트 실패를 감지하고 정확히 보고
+- [x] 사용자 변경을 덮어쓰지 않음
+- [x] 최종 diff와 테스트 결과 제공
+- [x] 승인 없이 커밋·push하지 않음
 
 ---
 
@@ -414,3 +414,4 @@
 | 2026-08-28 | 5 보강 | 지침 링크·Git diff 비밀 노출 차단, Workspace 상태 격리, 검색 스트리밍 제한과 파일 직접 검색 | 자동 테스트 85개, 실제 Qwen workspace_open·file_search·file_read 통과 | `9e72f15` |
 | 2026-08-29 | 6 | 위험도별 Permission Engine, 승인 대기·허용·거부·만료, 범위별 grant, API와 SQLite 기록 구현 | 자동 테스트 94개, 스키마 v2, 실제 Qwen python_execute 일회 승인 전 차단·승인 후 실행 통과 | `3c3d0d1` |
 | 2026-08-29 | 6 보강 | 승인 대기 슬롯 반환, 결정·grant 원자화, 메모리 정리, run 단위 거부, 영구 grant upsert·철회 구현 | 자동 테스트 99개, 스키마 v3, 승인 대기 중 별도 Qwen 채팅 및 승인 후 실행 통과 | `5b495a6` |
+| 2026-08-29 | 7 | SHA-256 충돌 감지 파일 변경, diff preview, 격리 셸·테스트, 로컬 Git commit 구현 | 자동 테스트 104개, 실제 Qwen 승인 기반 파일 생성·sandbox PASS, 임시 Git commit 통과 | 커밋 예정 |

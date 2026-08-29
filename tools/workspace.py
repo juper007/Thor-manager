@@ -1,4 +1,5 @@
 import os
+import hashlib
 import fnmatch
 import re
 import shutil
@@ -172,7 +173,7 @@ def file_read(manager,arguments):
     except UnicodeDecodeError: raise WorkspaceError('file is not valid UTF-8 text')
     lines=text.splitlines(); start=arguments.get('start_line',1); count=arguments.get('line_count',400)
     selected=lines[start-1:start-1+count]
-    return {'workspace':str(root),'path':path.relative_to(root).as_posix(),'size':size,'start_line':start,'end_line':start+len(selected)-1 if selected else start-1,'total_lines':len(lines),'content':'\n'.join(selected),'truncated':start-1+len(selected)<len(lines)}
+    return {'workspace':str(root),'path':path.relative_to(root).as_posix(),'size':size,'sha256':hashlib.sha256(data).hexdigest(),'start_line':start,'end_line':start+len(selected)-1 if selected else start-1,'total_lines':len(lines),'content':'\n'.join(selected),'truncated':start-1+len(selected)<len(lines)}
 
 
 def file_search(manager,arguments):
