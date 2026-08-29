@@ -411,4 +411,4 @@
 | 2026-08-28 | 3 보강 | 취소된 모델의 동시성 슬롯 보존, active run 보존, 반복 실패·완료 경쟁 수정 | 자동 테스트 61개, 실제 Qwen calculator 및 UI run_id 확인 | `814963f` |
 | 2026-08-28 | 4 | SQLite 스키마·마이그레이션·세션 API·복구·마스킹·보존 정책 구현 및 리뷰 수정 | 자동 테스트 71개, 스키마 v1, 재시작 보존·중단 복구·실제 resume API 통과 | `49f573b` |
 | 2026-08-28 | 5 | 허용 목록 기반 Workspace와 읽기 전용 파일·검색·Git 도구, 코드 분석 스킬 구현 | 자동 테스트 81개, 민감 경로 차단, 실제 Qwen 검색·읽기·줄 번호 답변 통과 | `d19e11f` |
-| 2026-08-28 | 5 보강 | 지침 링크·Git diff 비밀 노출 차단, Workspace 상태 격리, 검색 스트리밍 제한과 파일 직접 검색 | 자동 테스트 85개, 실제 Qwen workspace_open·file_search·file_read 통과 | 커밋 예정 |
+| 2026-08-28 | 5 보강 | 지침 링크·Git diff 비밀 노출 차단, Workspace 상태 격리, 검색 스트리밍 제한과 파일 직접 검색 | 자동 테스트 85개, 실제 Qwen workspace_open·file_search·file_read 통과 | `9e72f15` |
