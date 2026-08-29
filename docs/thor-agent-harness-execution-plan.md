@@ -1,6 +1,6 @@
 # Thor Agent Harness 실행 계획 및 체크리스트
 
-최종 갱신: 2026-08-28  
+최종 갱신: 2026-08-29  
 전체 상태: 7단계 완료 / 8단계 진행 중
 설계 문서: [`thor-agent-harness-blueprint.md`](thor-agent-harness-blueprint.md)
 
@@ -417,4 +417,4 @@
 | 2026-08-29 | 6 보강 | 승인 대기 슬롯 반환, 결정·grant 원자화, 메모리 정리, run 단위 거부, 영구 grant upsert·철회 구현 | 자동 테스트 99개, 스키마 v3, 승인 대기 중 별도 Qwen 채팅 및 승인 후 실행 통과 | `5b495a6` |
 | 2026-08-29 | 7 | SHA-256 충돌 감지 파일 변경, diff preview, 격리 셸·테스트, 로컬 Git commit 구현 | 자동 테스트 104개, 실제 Qwen 승인 기반 파일 생성·sandbox PASS, 임시 Git commit 통과 | `a5a522d` |
 | 2026-08-29 | 7 보강 | 교체 직전 재검증, read-only test sandbox, 명시적 git_stage와 index hash 고정, commit 오류 처리 | 자동 테스트 105개, 실제 Thor read-only 삭제 거부, edit→stage→commit 및 index 변경 차단 통과 | `eb5f50d` |
-| 2026-08-29 | 8 일부 | 모델 SSE를 NDJSON `delta`로 중계하고 UI에서 Markdown을 점진 렌더링, tool-call 원문 숨김 | 자동 테스트 108개, 실제 Qwen 응답 71개 delta와 단일 final 확인 | 커밋 예정 |
+| 2026-08-29 | 8 일부 | 모델 SSE를 NDJSON `delta`로 중계하고 UI에서 Markdown을 점진 렌더링, tool-call 원문 숨김 | 자동 테스트 108개, 실제 Qwen 응답 71개 delta와 단일 final 확인 | `60809a0` |
