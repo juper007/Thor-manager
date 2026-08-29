@@ -3,7 +3,9 @@ import fnmatch
 import re
 import shutil
 import subprocess
+import queue
 import threading
+import time
 from pathlib import Path
 
 
@@ -34,7 +36,7 @@ class WorkspaceManager:
         if not roots: raise WorkspaceError('at least one workspace root is required')
         selected=Path(default).expanduser().resolve(strict=True) if default else roots[0]
         if selected not in roots: raise WorkspaceError('default workspace is not in allowed roots')
-        self.allowed_roots=tuple(roots); self._current=selected; self._lock=threading.RLock()
+        self.allowed_roots=tuple(roots); self.default=selected
 
     @classmethod
     def from_environment(cls,default=None):
@@ -45,21 +47,23 @@ class WorkspaceManager:
 
     @property
     def current(self):
-        with self._lock: return self._current
+        return self.default
+
+    def select(self,value=None):
+        if value in (None,'','.'):
+            if len(self.allowed_roots)>1:
+                raise WorkspaceError('workspace is required when multiple roots are registered')
+            return self.default
+        matches=[root for root in self.allowed_roots if str(root)==value or root.name==value]
+        if len(matches)!=1: raise WorkspaceError('workspace is not registered or its name is ambiguous')
+        return matches[0]
 
     def open(self,value=None):
-        with self._lock:
-            if value in (None,'','.'):
-                selected=self._current
-            else:
-                matches=[root for root in self.allowed_roots if str(root)==value or root.name==value]
-                if len(matches)!=1: raise WorkspaceError('workspace is not registered or its name is ambiguous')
-                selected=matches[0]
-            self._current=selected
+        selected=self.select(value)
         return self.describe(selected)
 
-    def resolve(self,value='.',kind=None):
-        root=self.current
+    def resolve(self,value='.',kind=None,workspace=None):
+        root=self.select(workspace)
         raw=Path(value or '.')
         candidate=(raw if raw.is_absolute() else root/raw).resolve(strict=True)
         if not _inside(candidate,root): raise WorkspaceError('path escapes the active workspace')
@@ -67,32 +71,30 @@ class WorkspaceManager:
         if kind=='dir' and not candidate.is_dir(): raise WorkspaceError('path is not a directory')
         return root,candidate
 
-    def relative(self,path): return path.relative_to(self.current).as_posix() or '.'
-
-    def _git(self,*args,timeout=10):
+    def _git(self,root,*args,timeout=10):
         try:
-            result=subprocess.run(['git','-C',str(self.current),*args],capture_output=True,text=True,timeout=timeout,encoding='utf-8',errors='replace')
+            result=subprocess.run(['git','-C',str(root),*args],capture_output=True,text=True,timeout=timeout,encoding='utf-8',errors='replace')
         except (OSError,subprocess.TimeoutExpired) as exc: raise WorkspaceError(f'git command failed: {exc}')
         if result.returncode not in (0,1): raise WorkspaceError((result.stderr or 'git command failed').strip())
         return result
 
-    def ignored(self,path):
-        relative=path.relative_to(self.current).as_posix()
-        if self.protected(path): return True
-        try: result=subprocess.run(['git','-C',str(self.current),'check-ignore','--quiet','--',relative],capture_output=True,timeout=3)
+    def ignored(self,path,root=None):
+        root=root or self.default; relative=path.relative_to(root).as_posix()
+        if self.protected(path,root): return True
+        try: result=subprocess.run(['git','-C',str(root),'check-ignore','--quiet','--',relative],capture_output=True,timeout=3)
         except (OSError,subprocess.TimeoutExpired): return False
         if result.returncode==0: return True
-        return self._gitignore_match(relative,path.is_dir())
+        return self._gitignore_match(root,relative,path.is_dir())
 
-    def protected(self,path):
-        relative=path.relative_to(self.current)
+    def protected(self,path,root=None):
+        root=root or self.default; relative=path.relative_to(root)
         if any(part.startswith('.') for part in relative.parts): return True
         if any(part in BLOCKED_PARTS for part in relative.parts): return True
         name=relative.name.lower()
         return name in BLOCKED_NAMES or name.endswith(BLOCKED_SUFFIXES)
 
-    def _gitignore_match(self,relative,is_dir=False):
-        ignore_file=self.current/'.gitignore'
+    def _gitignore_match(self,root,relative,is_dir=False):
+        ignore_file=root/'.gitignore'
         try: patterns=ignore_file.read_text(encoding='utf-8').splitlines()
         except OSError: return False
         ignored=False; parts=Path(relative).parts
@@ -118,6 +120,8 @@ class WorkspaceManager:
             if not path.is_file(): continue
             resolved=path.resolve()
             if not _inside(resolved,root): continue
+            if self.protected(resolved,root):
+                found.append({'path':name,'content':'','error':'instruction target is protected'}); continue
             size=resolved.stat().st_size
             if size>MAX_INSTRUCTION_BYTES-used:
                 found.append({'path':name,'content':'','error':'instruction file exceeds remaining size limit'}); continue
@@ -134,11 +138,11 @@ class WorkspaceManager:
 def _hidden(relative): return any(part.startswith('.') for part in relative.parts)
 
 
-def workspace_open(manager,arguments): return manager.open(arguments.get('path'))
+def workspace_open(manager,arguments): return manager.open(arguments.get('workspace'))
 
 
 def file_list(manager,arguments):
-    root,start=manager.resolve(arguments.get('path','.'),'dir')
+    root,start=manager.resolve(arguments.get('path','.'),'dir',arguments.get('workspace'))
     max_depth=arguments.get('max_depth',2); max_entries=arguments.get('max_entries',200)
     include_hidden=arguments.get('include_hidden',False); entries=[]; truncated=False
     def walk(directory,depth):
@@ -147,7 +151,7 @@ def file_list(manager,arguments):
         except OSError as exc: raise WorkspaceError(str(exc))
         for child in children:
             relative=child.relative_to(root)
-            if (not include_hidden and _hidden(relative)) or manager.ignored(child): continue
+            if (not include_hidden and _hidden(relative)) or manager.ignored(child,root): continue
             resolved=child.resolve()
             if not _inside(resolved,root): continue
             if len(entries)>=max_entries: truncated=True; return
@@ -159,8 +163,8 @@ def file_list(manager,arguments):
 
 
 def file_read(manager,arguments):
-    root,path=manager.resolve(arguments['path'],'file'); size=path.stat().st_size
-    if manager.ignored(path): raise WorkspaceError('file is hidden, ignored, or protected')
+    root,path=manager.resolve(arguments['path'],'file',arguments.get('workspace')); size=path.stat().st_size
+    if manager.ignored(path,root): raise WorkspaceError('file is hidden, ignored, or protected')
     if size>MAX_READ_BYTES: raise WorkspaceError(f'file exceeds {MAX_READ_BYTES} byte limit')
     data=path.read_bytes()
     if b'\x00' in data: raise WorkspaceError('binary files cannot be read')
@@ -172,9 +176,9 @@ def file_read(manager,arguments):
 
 
 def file_search(manager,arguments):
-    root,start=manager.resolve(arguments.get('path','.'),'dir'); query=arguments['query']; max_results=arguments.get('max_results',100)
+    root,start=manager.resolve(arguments.get('path','.'),workspace=arguments.get('workspace')); query=arguments['query']; max_results=arguments.get('max_results',100)
     if shutil.which('rg') is None: return _python_search(manager,root,start,arguments)
-    command=['rg','--line-number','--column','--no-heading','--color','never','--max-count',str(max_results)]
+    command=['rg','--line-number','--column','--no-heading','--color','never','--max-filesize',str(MAX_READ_BYTES),'--max-columns','1000','--max-columns-preview']
     for excluded in ('.git/**','data/**','generated/**','**/__pycache__/**','**/.pytest_cache/**','**/.codex-deps/**','**/node_modules/**','**/*.env','**/*.db','**/*.db-wal','**/*.db-shm','**/*.pem','**/*.key','**/thor-password.txt'):
         command.extend(['--glob',f'!{excluded}'])
     if arguments.get('fixed_strings'): command.append('--fixed-strings')
@@ -182,19 +186,47 @@ def file_search(manager,arguments):
     if arguments.get('glob'): command.extend(['--glob',arguments['glob']])
     search_path=start.relative_to(root).as_posix() or '.'
     command.extend(['--',query,search_path])
-    try: result=subprocess.run(command,cwd=root,capture_output=True,text=True,timeout=15,encoding='utf-8',errors='replace')
+    try: process=subprocess.Popen(command,cwd=root,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf-8',errors='replace')
     except FileNotFoundError: raise WorkspaceError('rg is not installed')
-    except subprocess.TimeoutExpired: raise WorkspaceError('file search timed out')
-    if result.returncode not in (0,1): raise WorkspaceError((result.stderr or 'file search failed').strip())
-    matches=[]
-    for line in result.stdout.splitlines()[:max_results]:
+    output=queue.Queue(maxsize=max_results+2); finished=object(); stop=threading.Event()
+    def read_output():
+        try:
+            for item in process.stdout:
+                while not stop.is_set():
+                    try: output.put(item,timeout=.1); break
+                    except queue.Full: continue
+                if stop.is_set(): break
+        finally:
+            try: output.put_nowait(finished)
+            except queue.Full: pass
+    reader=threading.Thread(target=read_output,daemon=True,name='workspace-rg-reader'); reader.start()
+    matches=[]; truncated=False; deadline=time.monotonic()+15
+    while True:
+        remaining=deadline-time.monotonic()
+        if remaining<=0:
+            stop.set(); process.kill(); process.wait(); reader.join(timeout=1); raise WorkspaceError('file search timed out')
+        try: line=output.get(timeout=remaining)
+        except queue.Empty:
+            stop.set(); process.kill(); process.wait(); reader.join(timeout=1); raise WorkspaceError('file search timed out')
+        if line is finished: break
+        line=line.rstrip('\r\n')
         parts=line.split(':',3)
         if len(parts)!=4: continue
         file_name,line_number,column,text=parts
         path=(root/file_name).resolve()
-        if not _inside(path,root) or manager.ignored(path): continue
+        if not _inside(path,root) or manager.ignored(path,root): continue
+        if len(matches)>=max_results:
+            truncated=True; break
         matches.append({'path':path.relative_to(root).as_posix(),'line':int(line_number),'column':int(column),'text':text[:1000]})
-    return {'workspace':str(root),'query':query,'matches':matches,'truncated':len(result.stdout.splitlines())>max_results}
+    stop.set()
+    if process.poll() is None: process.terminate()
+    try: process.wait(timeout=2)
+    except subprocess.TimeoutExpired: process.kill(); process.wait()
+    reader.join(timeout=1)
+    stderr=process.stderr.read()
+    if process.returncode not in (0,1,-15) and len(matches)<max_results:
+        raise WorkspaceError((stderr or 'file search failed').strip())
+    return {'workspace':str(root),'query':query,'matches':matches,'truncated':truncated}
 
 
 def _python_search(manager,root,start,arguments):
@@ -203,9 +235,10 @@ def _python_search(manager,root,start,arguments):
     try: pattern=re.compile(re.escape(query) if fixed else query,flags)
     except re.error as exc: raise WorkspaceError(f'invalid search pattern: {exc}')
     glob=arguments.get('glob'); matches=[]; truncated=False
-    for path in sorted(start.rglob('*')):
+    candidates=[start] if start.is_file() else sorted(start.rglob('*'))
+    for path in candidates:
         relative=path.relative_to(root)
-        if not path.is_file() or _hidden(relative) or manager.ignored(path): continue
+        if not path.is_file() or _hidden(relative) or manager.ignored(path,root): continue
         if glob and not relative.match(glob): continue
         resolved=path.resolve()
         if not _inside(resolved,root): continue
@@ -225,16 +258,28 @@ def _python_search(manager,root,start,arguments):
 
 
 def git_status(manager,arguments):
-    root=manager.current; result=manager._git('status','--short','--branch')
-    return {'workspace':str(root),'output':result.stdout,'clean':not any(line and not line.startswith('##') for line in result.stdout.splitlines())}
+    root=manager.select(arguments.get('workspace')); result=manager._git(root,'status','--short','--branch')
+    lines=[]
+    for line in result.stdout.splitlines():
+        if line.startswith('##'): lines.append(line); continue
+        names=line[3:].split(' -> ')
+        if any(manager.protected(root/name.strip('"'),root) for name in names): continue
+        lines.append(line)
+    output='\n'.join(lines)+('' if not lines else '\n')
+    return {'workspace':str(root),'output':output,'clean':not any(line and not line.startswith('##') for line in lines)}
 
 
 def git_diff(manager,arguments):
-    root=manager.current; command=['diff','--no-ext-diff','--no-color']
-    if arguments.get('staged'): command.append('--cached')
+    root=manager.select(arguments.get('workspace')); base=['diff','--no-ext-diff','--no-color','--no-renames']
+    if arguments.get('staged'): base.append('--cached')
     path_value=arguments.get('path')
     if path_value:
-        _,path=manager.resolve(path_value)
-        command.extend(['--',path.relative_to(root).as_posix()])
-    result=manager._git(*command,timeout=15)
-    return {'workspace':str(root),'staged':arguments.get('staged',False),'path':path_value,'diff':result.stdout}
+        _,path=manager.resolve(path_value,workspace=arguments.get('workspace'))
+        if manager.protected(path,root): raise WorkspaceError('path is protected')
+        paths=[path.relative_to(root).as_posix()]
+    else:
+        names=manager._git(root,*base,'--name-only','-z',timeout=15).stdout.split('\0')
+        paths=[name for name in names if name and not manager.protected(root/name,root)]
+    if not paths: diff=''
+    else: diff=manager._git(root,*base,'--',*paths,timeout=15).stdout
+    return {'workspace':str(root),'staged':arguments.get('staged',False),'path':path_value,'diff':diff}

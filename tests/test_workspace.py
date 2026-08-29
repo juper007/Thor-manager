@@ -30,8 +30,16 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(result['instructions'][0]['path'],'AGENTS.md')
         self.assertIn('Read-only',result['instructions'][0]['content'])
 
+    def test_multiple_workspaces_require_explicit_stateless_selection(self):
+        other=Path(self.temp.name)/'other'; other.mkdir(); (other/'value.txt').write_text('other',encoding='utf-8')
+        manager=WorkspaceManager([self.root,other])
+        with self.assertRaises(WorkspaceError): workspace_open(manager,{})
+        self.assertEqual(workspace_open(manager,{'workspace':'other'})['name'],'other')
+        self.assertEqual(file_read(manager,{'workspace':'project','path':'README.md'})['content'],'# Demo')
+        self.assertEqual(file_read(manager,{'workspace':'other','path':'value.txt'})['content'],'other')
+
     def test_unregistered_workspace_is_rejected(self):
-        with self.assertRaises(WorkspaceError): workspace_open(self.manager,{'path':str(self.root.parent)})
+        with self.assertRaises(WorkspaceError): workspace_open(self.manager,{'workspace':str(self.root.parent)})
 
     def test_file_list_respects_hidden_and_gitignore(self):
         result=file_list(self.manager,{'max_depth':2})
@@ -62,8 +70,16 @@ class WorkspaceTests(unittest.TestCase):
         except OSError: self.skipTest('symlink creation is not permitted')
         with self.assertRaises(WorkspaceError): file_read(self.manager,{'path':'escape.txt'})
 
+    @unittest.skipUnless(hasattr(os,'symlink'),'symlinks unavailable')
+    def test_instruction_symlink_cannot_expose_protected_file(self):
+        instruction=self.root/'AGENTS.md'; instruction.unlink()
+        try: instruction.symlink_to(self.root/'local.env')
+        except OSError: self.skipTest('symlink creation is not permitted')
+        result=workspace_open(self.manager,{})['instructions'][0]
+        self.assertEqual(result['content'],''); self.assertIn('protected',result['error'])
+
     def test_file_search_returns_relative_line_evidence(self):
-        result=file_search(self.manager,{'query':'return 42','fixed_strings':True})
+        result=file_search(self.manager,{'query':'return 42','path':'src/app.py','fixed_strings':True})
         self.assertEqual(result['matches'][0]['path'],'src/app.py'); self.assertEqual(result['matches'][0]['line'],2)
 
     def test_file_search_falls_back_without_ripgrep(self):
@@ -78,6 +94,11 @@ class WorkspaceTests(unittest.TestCase):
         result=file_search(self.manager,{'query':'secret','fixed_strings':True})
         self.assertEqual(result['matches'],[])
 
+    def test_search_enforces_global_result_limit(self):
+        (self.root/'many.txt').write_text('\n'.join(['needle']*50),encoding='utf-8')
+        result=file_search(self.manager,{'query':'needle','fixed_strings':True,'max_results':3})
+        self.assertEqual(len(result['matches']),3); self.assertTrue(result['truncated'])
+
     def test_git_status_and_diff_are_read_only(self):
         before={path.relative_to(self.root).as_posix():path.stat().st_mtime_ns for path in self.root.rglob('*') if path.is_file() and '.git' not in path.parts}
         (self.root/'src'/'app.py').write_text('def answer():\n    return 43\n',encoding='utf-8')
@@ -86,6 +107,11 @@ class WorkspaceTests(unittest.TestCase):
         after={path.relative_to(self.root).as_posix():path.stat().st_mtime_ns for path in self.root.rglob('*') if path.is_file() and '.git' not in path.parts}
         changed={key for key in after if before.get(key)!=after[key]}
         self.assertEqual(changed,{'src/app.py'})
+
+    def test_git_tools_exclude_protected_files(self):
+        (self.root/'local.env').write_text('PASSWORD=changed-secret',encoding='utf-8')
+        status=git_status(self.manager,{}); diff=git_diff(self.manager,{})
+        self.assertNotIn('local.env',status['output']); self.assertNotIn('changed-secret',diff['diff'])
 
 
 if __name__=='__main__': unittest.main()

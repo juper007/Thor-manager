@@ -8,6 +8,7 @@ from tools.workspace import WorkspaceManager,file_list,file_read,file_search,git
 
 
 OBJECT={'type':'object','additionalProperties':False}
+WORKSPACE={'workspace':{'type':'string','maxLength':4096,'description':'Exact registered workspace name or root returned by workspace_open. Omit when only one root is registered.'}}
 
 
 def build_registry(workspace=None):
@@ -43,32 +44,32 @@ def build_registry(workspace=None):
         python_execute,RiskLevel.ELEVATED,40,30_000,
     ))
     registry.register(ToolSpec(
-        'workspace_open','Select a pre-registered workspace and return its root and project instruction files.',
-        {**OBJECT,'properties':{'path':{'type':'string','maxLength':4096}}},
+        'workspace_open','Open a registered workspace by its exact name or root. Omit workspace to open the only registered root. This argument is not a file path.',
+        {**OBJECT,'properties':{**WORKSPACE}},
         lambda args:workspace_open(workspace,args),RiskLevel.READ,5,80_000,
     ))
     registry.register(ToolSpec(
         'file_list','List non-ignored files and directories inside the active workspace.',
-        {**OBJECT,'properties':{'path':{'type':'string','maxLength':4096},'max_depth':{'type':'integer','minimum':0,'maximum':5},'max_entries':{'type':'integer','minimum':1,'maximum':500},'include_hidden':{'type':'boolean'}}},
+        {**OBJECT,'properties':{**WORKSPACE,'path':{'type':'string','maxLength':4096},'max_depth':{'type':'integer','minimum':0,'maximum':5},'max_entries':{'type':'integer','minimum':1,'maximum':500},'include_hidden':{'type':'boolean'}}},
         lambda args:file_list(workspace,args),RiskLevel.READ,10,50_000,
     ))
     registry.register(ToolSpec(
         'file_read','Read a bounded UTF-8 text file inside the active workspace.',
-        {**OBJECT,'properties':{'path':{'type':'string','minLength':1,'maxLength':4096},'start_line':{'type':'integer','minimum':1,'maximum':1000000},'line_count':{'type':'integer','minimum':1,'maximum':1000}},'required':['path']},
+        {**OBJECT,'properties':{**WORKSPACE,'path':{'type':'string','minLength':1,'maxLength':4096},'start_line':{'type':'integer','minimum':1,'maximum':1000000},'line_count':{'type':'integer','minimum':1,'maximum':1000}},'required':['path']},
         lambda args:file_read(workspace,args),RiskLevel.READ,5,80_000,
     ))
     registry.register(ToolSpec(
-        'file_search','Search workspace text with ripgrep while respecting Git ignore and hidden-file defaults.',
-        {**OBJECT,'properties':{'query':{'type':'string','minLength':1,'maxLength':500},'path':{'type':'string','maxLength':4096},'glob':{'type':'string','maxLength':200},'fixed_strings':{'type':'boolean'},'case_sensitive':{'type':'boolean'},'max_results':{'type':'integer','minimum':1,'maximum':200}},'required':['query']},
+        'file_search','Search text in a workspace directory or a specific file path while respecting ignore and protected-file policies.',
+        {**OBJECT,'properties':{**WORKSPACE,'query':{'type':'string','minLength':1,'maxLength':500},'path':{'type':'string','maxLength':4096},'glob':{'type':'string','maxLength':200},'fixed_strings':{'type':'boolean'},'case_sensitive':{'type':'boolean'},'max_results':{'type':'integer','minimum':1,'maximum':200}},'required':['query']},
         lambda args:file_search(workspace,args),RiskLevel.READ,20,80_000,
     ))
     registry.register(ToolSpec(
         'git_status','Read the active workspace Git branch and working-tree status.',
-        {**OBJECT,'properties':{}},lambda args:git_status(workspace,args),RiskLevel.READ,10,30_000,
+        {**OBJECT,'properties':{**WORKSPACE}},lambda args:git_status(workspace,args),RiskLevel.READ,10,30_000,
     ))
     registry.register(ToolSpec(
         'git_diff','Read unstaged or staged Git diff, optionally limited to one workspace path.',
-        {**OBJECT,'properties':{'staged':{'type':'boolean'},'path':{'type':'string','maxLength':4096}}},
+        {**OBJECT,'properties':{**WORKSPACE,'staged':{'type':'boolean'},'path':{'type':'string','maxLength':4096}}},
         lambda args:git_diff(workspace,args),RiskLevel.READ,20,100_000,
     ))
     return registry

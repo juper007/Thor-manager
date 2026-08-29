@@ -71,7 +71,7 @@ Only failed or cancelled sessions can be resumed. Retention defaults to 30 days 
 
 ## Read-only workspace tools
 
-`THOR_WORKSPACE_ROOTS` is an OS path-separator-delimited allowlist of directories the agent may inspect. It defaults to the server working directory. The workspace tools can select a registered root, list and read bounded text files, search with ripgrep or a safe Python fallback, and inspect Git status/diffs. Resolved paths and symlink targets must remain inside the active root; hidden and Git-ignored files are excluded from listing and search by default.
+`THOR_WORKSPACE_ROOTS` is an OS path-separator-delimited allowlist of directories the agent may inspect. It defaults to the server working directory. The workspace tools can select a registered root, list and read bounded text files, search with ripgrep or a safe Python fallback, and inspect filtered Git status/diffs. Resolved paths and symlink targets must remain inside the selected root; hidden, protected, and Git-ignored files are excluded. Selection is stateless: when multiple roots are registered, pass the exact `workspace` name or root returned by `workspace_open` to every subsequent workspace tool.
 
 Run the optional live web-tool smoke test on a networked host:
 
