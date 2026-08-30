@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-import base64, hmac, json, os, re, threading, time, urllib.request, urllib.error, urllib.parse, uuid
+import base64, hmac, json, os, re, subprocess, threading, time, urllib.request, urllib.error, urllib.parse, uuid
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from agent import models
 from agent.runtime import AgentRuntime,RunCancelled,RunLimitError,ServiceBusy,validate_messages,validate_run_id,validate_run_mode
 from agent.permissions import PermissionEngine
+from agent.mcp import MCPConnectionManager
+from agent.notifications import NotificationService
+from agent.scheduler import RunScheduler
+from agent.verification import VerificationAgent
+from agent.worktrees import WorktreeManager
+from tools import mcp as mcp_tools
 from monitoring import collector,cpu_percent,disk_net,gpu_utilization,history,lock,parse,read_text,state
 from storage import SessionStore
 import agent_tools
@@ -27,6 +33,9 @@ session_store = SessionStore(SESSION_DB)
 session_store.recover_interrupted()
 session_store.cleanup(positive_int_env('THOR_SESSION_MAX_AGE_DAYS',30),positive_int_env('THOR_SESSION_KEEP_RECENT',100))
 permission_engine=PermissionEngine(session_store,positive_int_env('THOR_APPROVAL_TTL_SECONDS',300))
+mcp_manager=MCPConnectionManager(session_store)
+mcp_tools.configure(mcp_manager)
+notification_service=NotificationService(session_store)
 
 def image_api_key():
     key = os.environ.get('THOR_IMAGE_API_KEY', '')
@@ -56,7 +65,21 @@ runtime=AgentRuntime(
     session_store=session_store,
     permission_engine=permission_engine,
     stream_model_call=lambda messages,callback: edge_chat(messages,on_delta=callback),
+    context_limit=positive_int_env('THOR_CONTEXT_CHARACTER_LIMIT',120000),
+    verification_agent=VerificationAgent(lambda messages: edge_chat(messages,max_tokens=1024)) if os.environ.get('THOR_VERIFY_AGENT','0')=='1' else None,
 )
+
+def run_schedule(schedule):
+    run_id='scheduled-'+str(schedule['id'])+'-'+uuid.uuid4().hex[:12]
+    try:
+        run,answer,_,_=runtime.run_chat([{'role':'user','content':schedule['prompt']}],run_id=run_id,mode='agent')
+        notification_service.send('schedule.completed',{'schedule_id':schedule['id'],'run_id':run.run_id,'answer':answer[:2000]})
+    except Exception as exc:
+        notification_service.send('schedule.failed',{'schedule_id':schedule['id'],'run_id':run_id,'error':str(exc)[:1000]})
+        raise
+
+scheduler=RunScheduler(session_store,run_schedule,positive_int_env('THOR_SCHEDULER_POLL_SECONDS',5))
+if os.environ.get('THOR_SCHEDULER_ENABLED','0')=='1': scheduler.start()
 
 
 def agent_chat(messages): return runtime.chat(messages)
@@ -121,6 +144,21 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_error(404); return
         if route == '/api/chat/models':
             body=b'[{"name":"engine-64k","size":0,"context_length":64000}]'; self.send_response(200); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body); return
+        if route == '/api/advanced/mcp': json_response(self,200,{'servers':mcp_manager.status()}); return
+        if route == '/api/advanced/memories':
+            query=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query); project=query.get('project',[str(ROOT)])[0]
+            json_response(self,200,{'project':project,'memories':session_store.memories(project)}); return
+        if route == '/api/advanced/schedules': json_response(self,200,{'schedules':session_store.list_schedules()}); return
+        if route == '/api/advanced/notifications': json_response(self,200,{'endpoints':session_store.notification_endpoints()}); return
+        if route == '/api/advanced/usage':
+            query=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            try: since=float(query.get('since',[time.time()-86400])[0])
+            except ValueError: self.send_error(400); return
+            json_response(self,200,session_store.usage_summary(since)); return
+        if route == '/api/advanced/worktrees':
+            try: json_response(self,200,{'worktrees':WorktreeManager(ROOT).list()})
+            except Exception as exc: json_response(self,409,{'error':str(exc)})
+            return
         if route == '/api/chat/approvals':
             query=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             run_id=query.get('run_id',[None])[0]; status=query.get('status',[None])[0]
@@ -161,6 +199,54 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         if not self.authenticated(): return
         route=self.path.split('?',1)[0]
+        if route == '/api/advanced/mcp':
+            try:
+                incoming=self.read_json_body(64_000); name=incoming.get('name','')
+                if not re.fullmatch(r'[A-Za-z0-9._-]{1,80}',name): raise ValueError('invalid MCP server name')
+                mcp_manager.add(name,incoming.get('command'),incoming.get('cwd'),incoming.get('env'),incoming.get('enabled',True)); json_response(self,201,{'created':True,'name':name})
+            except ValueError as exc: json_response(self,400,{'error':str(exc)})
+            return
+        if route.startswith('/api/advanced/mcp/'):
+            parts=route.split('/'); name=urllib.parse.unquote(parts[-2]); action=parts[-1]
+            try:
+                if action=='connect': client=mcp_manager.connect(name); json_response(self,200,{'connected':True,'name':name,'tools':client.list_tools()})
+                elif action=='disconnect': json_response(self,200,{'disconnected':mcp_manager.disconnect(name),'name':name})
+                else: self.send_error(404)
+            except KeyError: self.send_error(404)
+            except Exception as exc: json_response(self,409,{'error':str(exc)})
+            return
+        if route == '/api/advanced/memories':
+            try:
+                incoming=self.read_json_body(64_000); project=incoming.get('project',str(ROOT)); key=incoming.get('key',''); content=incoming.get('content','')
+                if not isinstance(project,str) or not isinstance(key,str) or not key or not isinstance(content,str) or not content: raise ValueError('project, key, and content are required')
+                session_store.remember(project,key,content); json_response(self,201,{'saved':True,'project':project,'key':key})
+            except ValueError as exc: json_response(self,400,{'error':str(exc)})
+            return
+        if route == '/api/advanced/schedules':
+            try:
+                incoming=self.read_json_body(64_000); schedule_id=session_store.create_schedule(incoming.get('name',''),incoming.get('prompt',''),incoming.get('interval_seconds'))
+                json_response(self,201,{'created':True,'schedule_id':schedule_id})
+            except (TypeError,ValueError) as exc: json_response(self,400,{'error':str(exc)})
+            return
+        if route.startswith('/api/advanced/schedules/'):
+            try:
+                schedule_id=int(route.rsplit('/',1)[-1]); incoming=self.read_json_body(4096)
+                if not session_store.set_schedule_enabled(schedule_id,incoming.get('enabled')): self.send_error(404)
+                else: json_response(self,200,{'updated':True,'schedule_id':schedule_id})
+            except ValueError as exc: json_response(self,400,{'error':str(exc)})
+            return
+        if route == '/api/advanced/notifications':
+            try:
+                incoming=self.read_json_body(16_000); name=incoming.get('name',''); url=incoming.get('url','')
+                if not name or not isinstance(url,str) or not url.lower().startswith('https://'): raise ValueError('name and an HTTPS URL are required')
+                session_store.add_notification_endpoint(name,url); json_response(self,201,{'created':True,'name':name})
+            except ValueError as exc: json_response(self,400,{'error':str(exc)})
+            return
+        if route == '/api/advanced/worktrees':
+            try:
+                incoming=self.read_json_body(4096); result=WorktreeManager(ROOT).create(incoming.get('name',''),incoming.get('base','HEAD')); json_response(self,201,result)
+            except (ValueError,FileExistsError,subprocess.SubprocessError) as exc: json_response(self,409,{'error':str(exc)})
+            return
         if route in ('/api/images/generations','/api/images/edits'):
             return self.proxy_image(route)
         if route == '/api/chat/cancel':
@@ -243,6 +329,27 @@ class Handler(SimpleHTTPRequestHandler):
     def do_DELETE(self):
         if not self.authenticated(): return
         route=self.path.split('?',1)[0]
+        if route.startswith('/api/advanced/mcp/'):
+            name=urllib.parse.unquote(route.rsplit('/',1)[-1]); mcp_manager.disconnect(name)
+            if not session_store.delete_mcp_server(name): self.send_error(404)
+            else: json_response(self,200,{'deleted':True,'name':name})
+            return
+        if route.startswith('/api/advanced/memories/'):
+            key=urllib.parse.unquote(route.rsplit('/',1)[-1]); query=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query); project=query.get('project',[str(ROOT)])[0]
+            if not session_store.forget(project,key): self.send_error(404)
+            else: json_response(self,200,{'deleted':True,'project':project,'key':key})
+            return
+        if route.startswith('/api/advanced/notifications/'):
+            value=route.rsplit('/',1)[-1]
+            if not value.isdigit(): self.send_error(400); return
+            if not session_store.delete_notification_endpoint(int(value)): self.send_error(404)
+            else: json_response(self,200,{'deleted':True,'endpoint_id':int(value)})
+            return
+        if route.startswith('/api/advanced/worktrees/'):
+            name=urllib.parse.unquote(route.rsplit('/',1)[-1])
+            try: WorktreeManager(ROOT).remove(name); json_response(self,200,{'removed':True,'name':name})
+            except Exception as exc: json_response(self,409,{'error':str(exc)})
+            return
         if not route.startswith('/api/chat/permission-grants/'):
             self.send_error(404); return
         value=route.rsplit('/',1)[-1]

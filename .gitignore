@@ -21,5 +21,6 @@ Thumbs.db
 .idea/
 .vscode/
 data/
+.thor-worktrees/
 *.db-wal
 *.db-shm

@@ -196,3 +196,75 @@ class SessionStore:
             if protected: sql+=f' AND run_id NOT IN ({placeholders})'; params.extend(protected)
             cursor=db.execute(sql,params)
             return cursor.rowcount
+
+    def upsert_mcp_server(self,name,command,cwd=None,env=None,enabled=True):
+        now=time.time()
+        with self.connect() as db:
+            db.execute('INSERT INTO mcp_servers(name,command_json,cwd,env_json,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET command_json=excluded.command_json,cwd=excluded.cwd,env_json=excluded.env_json,enabled=excluded.enabled,updated_at=excluded.updated_at',
+                (name,redacted_json(command),cwd,redacted_json(env or {}),int(bool(enabled)),now,now))
+
+    def list_mcp_servers(self,enabled=None):
+        sql='SELECT * FROM mcp_servers'; params=[]
+        if enabled is not None: sql+=' WHERE enabled=?'; params.append(int(bool(enabled)))
+        with self.connect() as db: rows=[dict(row) for row in db.execute(sql+' ORDER BY name',params)]
+        for row in rows:
+            row['command']=json.loads(row.pop('command_json')); row['env']=json.loads(row.pop('env_json')); row['enabled']=bool(row['enabled'])
+        return rows
+
+    def delete_mcp_server(self,name):
+        with self.connect() as db: return db.execute('DELETE FROM mcp_servers WHERE name=?',(name,)).rowcount==1
+
+    def remember(self,project_key,memory_key,content):
+        now=time.time()
+        with self.connect() as db:
+            db.execute('INSERT INTO project_memories(project_key,memory_key,content,created_at,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(project_key,memory_key) DO UPDATE SET content=excluded.content,updated_at=excluded.updated_at',
+                (project_key,memory_key,redact(content),now,now))
+
+    def memories(self,project_key,limit=50):
+        with self.connect() as db: return [dict(row) for row in db.execute('SELECT memory_key,content,created_at,updated_at FROM project_memories WHERE project_key=? ORDER BY updated_at DESC LIMIT ?', (project_key,max(1,min(int(limit),200))))]
+
+    def forget(self,project_key,memory_key):
+        with self.connect() as db: return db.execute('DELETE FROM project_memories WHERE project_key=? AND memory_key=?',(project_key,memory_key)).rowcount==1
+
+    def create_schedule(self,name,prompt,interval_seconds,next_run_at=None):
+        if not isinstance(name,str) or not name.strip() or not isinstance(prompt,str) or not prompt.strip(): raise ValueError('schedule name and prompt are required')
+        now=time.time(); interval=max(60,int(interval_seconds))
+        with self.connect() as db:
+            cursor=db.execute('INSERT INTO scheduled_runs(name,prompt,interval_seconds,next_run_at,enabled,created_at,updated_at) VALUES (?,?,?,?,1,?,?)',
+                (name,redact(prompt),interval,float(next_run_at or now+interval),now,now))
+            return cursor.lastrowid
+
+    def list_schedules(self):
+        with self.connect() as db: return [dict(row) for row in db.execute('SELECT * FROM scheduled_runs ORDER BY next_run_at,id')]
+
+    def due_schedules(self,now=None):
+        with self.connect() as db: return [dict(row) for row in db.execute('SELECT * FROM scheduled_runs WHERE enabled=1 AND next_run_at<=? ORDER BY next_run_at,id',(float(now or time.time()),))]
+
+    def finish_schedule(self,schedule_id,status,finished_at=None):
+        now=float(finished_at or time.time())
+        with self.connect() as db:
+            db.execute('UPDATE scheduled_runs SET last_run_at=?,last_status=?,next_run_at=?+interval_seconds,updated_at=? WHERE id=?',(now,status,now,now,int(schedule_id)))
+
+    def set_schedule_enabled(self,schedule_id,enabled):
+        with self.connect() as db: return db.execute('UPDATE scheduled_runs SET enabled=?,updated_at=? WHERE id=?',(int(bool(enabled)),time.time(),int(schedule_id))).rowcount==1
+
+    def add_notification_endpoint(self,name,url):
+        now=time.time()
+        with self.connect() as db:
+            db.execute('INSERT INTO notification_endpoints(name,url,enabled,created_at,updated_at) VALUES (?,?,1,?,?) ON CONFLICT(name) DO UPDATE SET url=excluded.url,enabled=1,updated_at=excluded.updated_at',(name,url,now,now))
+
+    def delete_notification_endpoint(self,endpoint_id):
+        with self.connect() as db: return db.execute('DELETE FROM notification_endpoints WHERE id=?',(int(endpoint_id),)).rowcount==1
+
+    def notification_endpoints(self):
+        with self.connect() as db: return [dict(row) for row in db.execute('SELECT * FROM notification_endpoints WHERE enabled=1 ORDER BY name')]
+
+    def record_usage(self,metric,value,run_id=None,tags=None,created_at=None):
+        with self.connect() as db: db.execute('INSERT INTO usage_samples(run_id,metric,value,tags_json,created_at) VALUES (?,?,?,?,?)',(run_id,metric,float(value),redacted_json(tags or {}),float(created_at or time.time())))
+
+    def usage_summary(self,since=None):
+        since=float(since or time.time()-86400)
+        with self.connect() as db:
+            metrics=[dict(row) for row in db.execute('SELECT metric,COUNT(*) samples,SUM(value) total,AVG(value) average,MIN(value) minimum,MAX(value) maximum FROM usage_samples WHERE created_at>=? GROUP BY metric ORDER BY metric',(since,))]
+            runs=dict(db.execute("SELECT COUNT(*) total,SUM(state='completed') completed,SUM(state='failed') failed,SUM(state='cancelled') cancelled,COALESCE(AVG(tool_calls),0) average_tool_calls FROM sessions WHERE created_at>=?",(since,)).fetchone())
+        return {'since':since,'runs':runs,'metrics':metrics}

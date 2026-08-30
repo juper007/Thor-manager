@@ -6,6 +6,7 @@ from tools.registry import ToolRegistry
 from tools.system import system_status
 from tools.web import read_webpage,web_search
 from tools.workspace import WorkspaceManager,file_list,file_read,file_search,git_diff,git_status,workspace_open
+from tools.mcp import mcp_call,mcp_list
 
 
 OBJECT={'type':'object','additionalProperties':False}
@@ -39,6 +40,11 @@ def build_registry(workspace=None):
         'system_status','Read Jetson hostname, uptime, load, memory, disk, and GPU state.',
         {**OBJECT,'properties':{}},system_status,RiskLevel.READ,5,20_000,
     ))
+    registry.register(ToolSpec('mcp_list','List configured MCP servers and their available tools.',
+        {**OBJECT,'properties':{}},mcp_list,RiskLevel.READ,35,50_000))
+    registry.register(ToolSpec('mcp_call','Call a tool on a configured MCP server. External MCP tools require approval.',
+        {**OBJECT,'properties':{'server':{'type':'string','minLength':1,'maxLength':80},'tool':{'type':'string','minLength':1,'maxLength':200},'arguments':{'type':'object'}},'required':['server','tool']},
+        mcp_call,RiskLevel.ELEVATED,65,80_000))
     registry.register(ToolSpec(
         'python_execute','Run Python in the isolated, network-disabled Docker sandbox.',
         {**OBJECT,'properties':{'code':{'type':'string','minLength':1,'maxLength':12000}},'required':['code']},

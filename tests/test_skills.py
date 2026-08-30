@@ -10,7 +10,7 @@ from tools.registry import ToolRegistry
 
 
 ROOT=Path(__file__).resolve().parents[1]
-ALL_SKILLS={'code-interpreter','codebase-analysis','local-time','safe-calculator','thor-system-status','web-research','code-review','debugging','test-and-fix','git-workflow','docker-deployment','systemd-service','jetson-optimization'}
+ALL_SKILLS={'code-interpreter','codebase-analysis','local-time','safe-calculator','thor-system-status','web-research','code-review','debugging','test-and-fix','git-workflow','docker-deployment','systemd-service','jetson-optimization','mcp-integration'}
 KNOWN_TOOLS={item['name']:item['risk_level'] for item in DEFAULT_REGISTRY.model_catalog()}
 
 

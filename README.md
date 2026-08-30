@@ -34,6 +34,10 @@ THOR_SESSION_MAX_AGE_DAYS=30
 THOR_SESSION_KEEP_RECENT=100
 THOR_APPROVAL_TTL_SECONDS=300
 THOR_WORKSPACE_ROOTS=/home/juper007/thor-monitor
+THOR_CONTEXT_CHARACTER_LIMIT=120000
+THOR_VERIFY_AGENT=0
+THOR_SCHEDULER_ENABLED=0
+THOR_SCHEDULER_POLL_SECONDS=5
 ```
 
 Install or update the unit only after the environment file exists:
@@ -91,6 +95,26 @@ Run the optional live web-tool smoke test on a networked host:
 ```bash
 python3 scripts/smoke_web_tool.py
 ```
+
+## Advanced agent services
+
+Stage 10 adds a managed MCP stdio client, automatic context compaction, project-scoped long-term memory, Git worktree isolation, an optional independent verification model pass, persistent interval schedules, public-HTTPS webhook notifications, and a 24-hour usage/performance dashboard on the main monitor page.
+
+The management API is authenticated with the same Basic authentication as the rest of Thor Monitor:
+
+```text
+GET/POST/DELETE /api/advanced/mcp[/{name}]
+POST            /api/advanced/mcp/{name}/connect
+POST            /api/advanced/mcp/{name}/disconnect
+GET/POST/DELETE /api/advanced/memories[/{key}]?project={project-key}
+GET/POST         /api/advanced/schedules
+POST             /api/advanced/schedules/{id}
+POST/DELETE      /api/advanced/notifications[/{id}]
+GET/POST/DELETE /api/advanced/worktrees[/{name}]
+GET              /api/advanced/usage?since={unix-seconds}
+```
+
+MCP tools are exposed to the model as `mcp_list` and `mcp_call`; calls to external MCP tools are classified as elevated and pass through the existing approval engine. Schedules and the verification pass are disabled by default. Enable them explicitly with `THOR_SCHEDULER_ENABLED=1` and `THOR_VERIFY_AGENT=1`. Notification targets must use public HTTPS addresses and are resolved to pinned public IPs to prevent DNS-rebinding SSRF.
 
 ## Architecture
 

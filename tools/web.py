@@ -91,6 +91,24 @@ def request(url,limit=800_000,timeout=20):
     raise ValueError('too many redirects')
 
 
+def post_json(url,body,timeout=10):
+    parsed,addresses=_public_target(url)
+    if parsed.scheme!='https': raise ValueError('notifications require HTTPS')
+    data=body if isinstance(body,bytes) else str(body).encode()
+    port=parsed.port or 443; path=urllib.parse.urlunsplit(('', '', parsed.path or '/',parsed.query,''))
+    host=parsed.hostname if parsed.port is None else f'{parsed.hostname}:{parsed.port}'
+    last_error=None
+    for address in addresses:
+        connection=_PinnedHTTPSConnection(parsed.hostname,address,port,timeout)
+        try:
+            connection.request('POST',path,body=data,headers={'Host':host,'User-Agent':USER_AGENT,'Content-Type':'application/json','Content-Length':str(len(data)),'Connection':'close'})
+            response=connection.getresponse(); status=response.status; response.read(64_000); response.close()
+            if status>=400: raise ValueError(f'notification failed with HTTP {status}')
+            return status
+        except OSError as exc: last_error=exc; connection.close()
+    raise last_error or OSError('unable to connect to validated target')
+
+
 def web_search(args):
     query=str(args.get('query','')).strip()[:300]; count=max(1,min(8,int(args.get('max_results',5))))
     if not query: raise ValueError('query is required')
