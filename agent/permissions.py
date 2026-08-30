@@ -27,9 +27,9 @@ class PermissionEngine:
         self.store=store; self.ttl_seconds=max(1,int(ttl_seconds))
         self._pending={}; self._denied={}; self._condition=threading.Condition()
 
-    def _grant(self,run_id,tool_name,risk_level):
+    def _grant(self,run_id,tool_name,risk_level,owner_id='thor'):
         if self.store is None: return None
-        return self.store.find_permission_grant(run_id,tool_name,risk_level)
+        return self.store.find_permission_grant(run_id,tool_name,risk_level,owner_id)
 
     def authorize(self,run,spec,arguments,cancelled=lambda:False,timeout=None,on_wait=None,on_resume=None):
         risk=spec.risk_level.value
@@ -38,7 +38,7 @@ class PermissionEngine:
         with self._condition:
             if spec.name in self._denied.get(run.run_id,set()):
                 return {'allowed':False,'error_code':'permission_denied','error':'tool permission denied for this run'}
-        grant=self._grant(run.run_id,spec.name,risk)
+        grant=self._grant(run.run_id,spec.name,risk,run.owner_id)
         if grant: return {'allowed':True,'source':grant['scope']}
         now=time.time(); approval={
             'approval_id':uuid.uuid4().hex,'run_id':run.run_id,'tool_name':spec.name,'risk_level':risk,
@@ -95,8 +95,9 @@ class PermissionEngine:
             if approval['expires_at']<=time.time(): raise ValueError('approval has expired')
             status='allowed' if decision=='allow' else 'denied'; selected_scope=scope if decision=='allow' else None; decided_at=time.time()
             if self.store is not None:
+                session=self.store.get_session(approval['run_id']); owner_id=session.get('owner_id','thor') if session else 'thor'
                 self.store.apply_permission_decision(approval_id,status,selected_scope,decided_at,
-                    approval['run_id'],approval['tool_name'],approval['risk_level'])
+                    approval['run_id'],approval['tool_name'],approval['risk_level'],owner_id)
             approval['status']=status; approval['scope']=selected_scope; approval['decided_at']=decided_at
             self._pending[approval_id]=approval; self._condition.notify_all()
         return approval
@@ -109,8 +110,8 @@ class PermissionEngine:
         if status: rows=[row for row in rows if row['status']==status]
         return rows
 
-    def grants(self): return self.store.list_permission_grants() if self.store is not None else []
+    def grants(self,owner_id=None): return self.store.list_permission_grants(owner_id) if self.store is not None else []
 
-    def revoke(self,grant_id):
+    def revoke(self,grant_id,owner_id=None):
         if self.store is None: return False
-        return self.store.revoke_permission_grant(grant_id)
+        return self.store.revoke_permission_grant(grant_id,owner_id)

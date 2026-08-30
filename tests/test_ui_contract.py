@@ -82,6 +82,8 @@ class UIContractTests(unittest.TestCase):
             with self.subTest(marker=marker): self.assertIn(marker,self.agent_css)
         self.assertIn('/ai-agent.css?v=13',self.page)
         self.assertIn('/ai-workspace.js?v=12',self.page)
+        self.assertIn('/auth-ui.js?v=1',self.page)
+        self.assertIn('id="authUser"',self.page); self.assertIn('id="logout"',self.page)
 
     def test_session_browser_and_resume_contract(self):
         for marker in ('id="sessionList"','id="refreshSessions"','id="moreSessions"'):

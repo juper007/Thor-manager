@@ -95,11 +95,11 @@ class AgentRuntime:
         except (TypeError,ValueError): accepts_request=False
         return self.skill_loader(self.root,messages) if accepts_request else self.skill_loader(self.root)
 
-    def create_run(self,run_id=None):
+    def create_run(self,run_id=None,owner_id='thor'):
         run_id=validate_run_id(run_id)
         with self._runs_lock:
             if run_id in self._runs: raise ValueError('run_id already exists')
-            run=AgentRun(run_id); run.emit('run.created'); self._runs[run_id]=run
+            run=AgentRun(run_id,owner_id=owner_id); run.emit('run.created'); self._runs[run_id]=run
             self._prune_runs_locked()
         return run
 
@@ -129,9 +129,9 @@ class AgentRuntime:
         _,answer,events,sources=self.run_chat(messages)
         return answer,events,sources
 
-    def run_chat(self,messages,run_id=None,resumed_from=None,on_delta=None,mode='agent'):
+    def run_chat(self,messages,run_id=None,resumed_from=None,on_delta=None,mode='agent',owner_id='thor'):
         mode=validate_run_mode(mode)
-        run=self.create_run(run_id)
+        run=self.create_run(run_id,owner_id)
         if self.session_store is not None:
             self.session_store.create_session(run.snapshot(),messages,resumed_from=resumed_from)
             run._on_change=lambda snapshot: None if snapshot['state']==RunState.COMPLETED.value else self.session_store.save_snapshot(snapshot)

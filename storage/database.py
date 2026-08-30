@@ -58,8 +58,8 @@ class SessionStore:
     def create_session(self,snapshot,messages,resumed_from=None):
         now=time.time()
         with self.connect() as db:
-            db.execute('INSERT INTO sessions(run_id,state,created_at,updated_at,iterations,tool_calls,error,resumed_from) VALUES (?,?,?,?,?,?,?,?)',
-                (snapshot['run_id'],snapshot['state'],snapshot['created_at'],snapshot['updated_at'],snapshot['iterations'],snapshot['tool_calls'],snapshot.get('error'),resumed_from))
+            db.execute('INSERT INTO sessions(run_id,state,created_at,updated_at,iterations,tool_calls,error,resumed_from,owner_id) VALUES (?,?,?,?,?,?,?,?,?)',
+                (snapshot['run_id'],snapshot['state'],snapshot['created_at'],snapshot['updated_at'],snapshot['iterations'],snapshot['tool_calls'],snapshot.get('error'),resumed_from,snapshot.get('owner_id','thor')))
             for sequence,message in enumerate(messages,1):
                 db.execute('INSERT INTO messages(run_id,sequence,role,content,created_at) VALUES (?,?,?,?,?)',
                     (snapshot['run_id'],sequence,message['role'],redact(message['content']),now))
@@ -90,15 +90,15 @@ class SessionStore:
             cursor=db.execute("UPDATE permission_requests SET status=?,scope=?,decided_at=? WHERE approval_id=? AND status='pending'",(status,scope,decided_at,approval_id))
             if cursor.rowcount!=1: raise ValueError('approval is no longer pending')
 
-    def apply_permission_decision(self,approval_id,status,scope,decided_at,run_id,tool_name,risk_level):
+    def apply_permission_decision(self,approval_id,status,scope,decided_at,run_id,tool_name,risk_level,owner_id='thor'):
         with self.connect() as db:
             cursor=db.execute("UPDATE permission_requests SET status=?,scope=?,decided_at=? WHERE approval_id=? AND status='pending'",(status,scope,decided_at,approval_id))
             if cursor.rowcount!=1: raise ValueError('approval is no longer pending')
             if status=='allowed' and scope in ('session','always_tool'):
                 stored_run=run_id if scope=='session' else None
-                grant_key=f'{scope}:{stored_run or "*"}:{tool_name}:{risk_level}'
-                db.execute('INSERT INTO permission_grants(grant_key,scope,run_id,tool_name,risk_level,created_at,expires_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(grant_key) DO UPDATE SET created_at=excluded.created_at,expires_at=excluded.expires_at',(
-                    grant_key,scope,stored_run,tool_name,risk_level,time.time(),None))
+                grant_key=f'{owner_id}:{scope}:{stored_run or "*"}:{tool_name}:{risk_level}'
+                db.execute('INSERT INTO permission_grants(grant_key,scope,run_id,tool_name,risk_level,created_at,expires_at,owner_id) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(grant_key) DO UPDATE SET created_at=excluded.created_at,expires_at=excluded.expires_at',(
+                    grant_key,scope,stored_run,tool_name,risk_level,time.time(),None,owner_id))
 
     def get_permission_request(self,approval_id):
         with self.connect() as db:
@@ -116,26 +116,30 @@ class SessionStore:
         for row in rows: row['arguments']=json.loads(row.pop('arguments_json'))
         return rows
 
-    def save_permission_grant(self,scope,run_id,tool_name,risk_level):
+    def save_permission_grant(self,scope,run_id,tool_name,risk_level,owner_id='thor'):
         stored_run=run_id if scope=='session' else None
-        grant_key=f'{scope}:{stored_run or "*"}:{tool_name}:{risk_level}'
+        grant_key=f'{owner_id}:{scope}:{stored_run or "*"}:{tool_name}:{risk_level}'
         with self.connect() as db:
-            db.execute('INSERT INTO permission_grants(grant_key,scope,run_id,tool_name,risk_level,created_at,expires_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(grant_key) DO UPDATE SET created_at=excluded.created_at,expires_at=excluded.expires_at',(
-                grant_key,scope,stored_run,tool_name,risk_level,time.time(),None))
+            db.execute('INSERT INTO permission_grants(grant_key,scope,run_id,tool_name,risk_level,created_at,expires_at,owner_id) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(grant_key) DO UPDATE SET created_at=excluded.created_at,expires_at=excluded.expires_at',(
+                grant_key,scope,stored_run,tool_name,risk_level,time.time(),None,owner_id))
 
-    def list_permission_grants(self):
-        with self.connect() as db: return [dict(row) for row in db.execute('SELECT * FROM permission_grants ORDER BY created_at DESC')]
+    def list_permission_grants(self,owner_id=None):
+        sql='SELECT * FROM permission_grants'; params=[]
+        if owner_id is not None: sql+=' WHERE owner_id=?'; params.append(owner_id)
+        with self.connect() as db: return [dict(row) for row in db.execute(sql+' ORDER BY created_at DESC',params)]
 
-    def revoke_permission_grant(self,grant_id):
+    def revoke_permission_grant(self,grant_id,owner_id=None):
         with self.connect() as db:
-            cursor=db.execute('DELETE FROM permission_grants WHERE id=?',(int(grant_id),))
+            sql='DELETE FROM permission_grants WHERE id=?'; params=[int(grant_id)]
+            if owner_id is not None: sql+=' AND owner_id=?'; params.append(owner_id)
+            cursor=db.execute(sql,params)
             return cursor.rowcount==1
 
-    def find_permission_grant(self,run_id,tool_name,risk_level):
+    def find_permission_grant(self,run_id,tool_name,risk_level,owner_id='thor'):
         now=time.time()
         with self.connect() as db:
-            row=db.execute("SELECT * FROM permission_grants WHERE tool_name=? AND risk_level=? AND (scope='always_tool' OR (scope='session' AND run_id=?)) AND (expires_at IS NULL OR expires_at>?) ORDER BY CASE scope WHEN 'session' THEN 0 ELSE 1 END LIMIT 1",
-                (tool_name,risk_level,run_id,now)).fetchone()
+            row=db.execute("SELECT * FROM permission_grants WHERE owner_id=? AND tool_name=? AND risk_level=? AND (scope='always_tool' OR (scope='session' AND run_id=?)) AND (expires_at IS NULL OR expires_at>?) ORDER BY CASE scope WHEN 'session' THEN 0 ELSE 1 END LIMIT 1",
+                (owner_id,tool_name,risk_level,run_id,now)).fetchone()
         return dict(row) if row else None
 
     def complete_session(self,snapshot,answer):
@@ -150,9 +154,11 @@ class SessionStore:
                 db.execute('INSERT OR REPLACE INTO run_events VALUES (?,?,?,?,?,?)',
                     (run_id,event['sequence'],event['timestamp'],event['type'],event['state'],redacted_json(event.get('payload',{}))))
 
-    def get_session(self,run_id):
+    def get_session(self,run_id,owner_id=None):
         with self.connect() as db:
-            row=db.execute('SELECT * FROM sessions WHERE run_id=?',(run_id,)).fetchone()
+            sql='SELECT * FROM sessions WHERE run_id=?'; params=[run_id]
+            if owner_id is not None: sql+=' AND owner_id=?'; params.append(owner_id)
+            row=db.execute(sql,params).fetchone()
             if row is None: return None
             result=dict(row)
             result['metadata']=json.loads(result.pop('metadata_json'))
@@ -163,12 +169,14 @@ class SessionStore:
             for item in result['tools']: item.pop('arguments_json'); item.pop('result_json')
             return result
 
-    def list_sessions(self,limit=50,offset=0):
+    def list_sessions(self,limit=50,offset=0,owner_id=None):
         limit=max(1,min(int(limit),100)); offset=max(0,int(offset))
+        where=' WHERE s.owner_id=?' if owner_id is not None else ''
+        params=[owner_id,limit,offset] if owner_id is not None else [limit,offset]
         with self.connect() as db:
             return [dict(row) for row in db.execute("""SELECT s.run_id,s.state,s.created_at,s.updated_at,s.iterations,s.tool_calls,s.error,s.final_answer,s.resumed_from,
                 COALESCE((SELECT json_extract(e.payload_json,'$.mode') FROM run_events e WHERE e.run_id=s.run_id AND e.type='run.mode' ORDER BY e.sequence LIMIT 1),'agent') AS mode
-                FROM sessions s ORDER BY s.updated_at DESC LIMIT ? OFFSET ?""",(limit,offset))]
+                FROM sessions s"""+where+' ORDER BY s.updated_at DESC LIMIT ? OFFSET ?',params)]
 
     def recover_interrupted(self):
         now=time.time(); message='server restarted before the run reached a terminal state'
@@ -178,8 +186,8 @@ class SessionStore:
             db.execute("UPDATE permission_requests SET status='cancelled',decided_at=? WHERE status='pending'",(now,))
         return rows
 
-    def resumable_messages(self,run_id):
-        session=self.get_session(run_id)
+    def resumable_messages(self,run_id,owner_id=None):
+        session=self.get_session(run_id,owner_id)
         if session is None: raise KeyError(run_id)
         if session['state'] not in ('failed','cancelled'): raise ValueError('only failed or cancelled sessions can be resumed')
         messages=[{'role':item['role'],'content':item['content']} for item in session['messages'] if item['role'] in ('user','assistant')]

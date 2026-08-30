@@ -43,6 +43,7 @@ class AgentEvent:
 @dataclass
 class AgentRun:
     run_id:str
+    owner_id:str='thor'
     state:RunState=RunState.ANALYZING
     created_at:float=field(default_factory=time.time)
     updated_at:float=field(default_factory=time.time)
@@ -111,7 +112,7 @@ class AgentRun:
     def snapshot(self,include_events=True):
         with self._lock:
             result={
-                'run_id':self.run_id,'state':self.state.value,'created_at':self.created_at,'updated_at':self.updated_at,
+                'run_id':self.run_id,'owner_id':self.owner_id,'state':self.state.value,'created_at':self.created_at,'updated_at':self.updated_at,
                 'iterations':self.iterations,'tool_calls':self.tool_calls,'error':self.error,
             }
             if include_events: result['events']=[event.as_dict() for event in self.events]

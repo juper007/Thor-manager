@@ -31,9 +31,9 @@ class RunningServer:
         self.httpd.shutdown(); self.httpd.server_close(); self.thread.join(timeout=2)
 
 
-def basic(password='test-password'):
+def basic(password='test-password',username='thor'):
     import base64
-    return 'Basic '+base64.b64encode(('thor:'+password).encode()).decode()
+    return 'Basic '+base64.b64encode((username+':'+password).encode()).decode()
 
 
 class HandlerIntegrationTests(unittest.TestCase):
@@ -53,6 +53,41 @@ class HandlerIntegrationTests(unittest.TestCase):
             status,_,payload=app.request('GET','/api/stats',headers={'Authorization':basic()})
         self.assertEqual(status,200)
         self.assertIn('history',json.loads(payload))
+
+    def test_login_cookie_authenticates_and_logout_clears_it(self):
+        body=json.dumps({'username':'alice','password':'wonderland'}).encode()
+        headers={'Content-Type':'application/json','Content-Length':str(len(body))}
+        users=json.dumps({'alice':'wonderland'})
+        with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password','THOR_MONITOR_USERS_JSON':users},clear=True),RunningServer() as app:
+            status,response_headers,payload=app.request('POST','/api/auth/login',body,headers)
+            cookie=response_headers['Set-Cookie'].split(';',1)[0]
+            me_status,_,me_payload=app.request('GET','/api/auth/me',headers={'Cookie':cookie})
+            bad_status,_,_=app.request('GET','/api/auth/me',headers={'Cookie':cookie+'x'})
+            logout_status,logout_headers,_=app.request('POST','/api/auth/logout',headers={'Cookie':cookie})
+        self.assertEqual((status,me_status,bad_status,logout_status),(200,200,401,200))
+        self.assertEqual(json.loads(payload)['username'],'alice'); self.assertEqual(json.loads(me_payload)['username'],'alice')
+        self.assertIn('HttpOnly',response_headers['Set-Cookie']); self.assertIn('Max-Age=0',logout_headers['Set-Cookie'])
+
+    def test_browser_page_redirects_to_login(self):
+        with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),RunningServer() as app:
+            status,headers,_=app.request('GET','/ai')
+            login_status,_,login_body=app.request('GET','/login')
+        self.assertEqual(status,303); self.assertEqual(headers['Location'],'/login')
+        self.assertEqual(login_status,200); self.assertIn(b'THOR',login_body)
+        self.assertIn(b'target.origin===location.origin',login_body)
+
+    def test_session_endpoints_do_not_expose_another_users_session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store=SessionStore(Path(directory)/'sessions.db'); now=1.0
+            store.create_session({'run_id':'alice-run','owner_id':'alice','state':'completed','created_at':now,'updated_at':now,'iterations':1,'tool_calls':0,'error':None,'events':[]},[{'role':'user','content':'private'}])
+            users=json.dumps({'alice':'a-pass','bob':'b-pass'})
+            with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password','THOR_MONITOR_USERS_JSON':users},clear=True),mock.patch.object(server,'session_store',store),RunningServer() as app:
+                alice_status,_,alice_body=app.request('GET','/api/chat/sessions',headers={'Authorization':basic('a-pass','alice')})
+                bob_status,_,bob_body=app.request('GET','/api/chat/sessions',headers={'Authorization':basic('b-pass','bob')})
+                detail_status,_,_=app.request('GET','/api/chat/sessions/alice-run',headers={'Authorization':basic('b-pass','bob')})
+        self.assertEqual(alice_status,200); self.assertEqual(len(json.loads(alice_body)['sessions']),1)
+        self.assertEqual(bob_status,200); self.assertEqual(json.loads(bob_body)['sessions'],[])
+        self.assertEqual(detail_status,404)
 
     def test_chat_contract(self):
         response=('테스트 답변',[{'name':'calculator','arguments':{'expression':'2+2'},'seconds':0.01,'error':None}],[])
@@ -74,7 +109,7 @@ class HandlerIntegrationTests(unittest.TestCase):
         body=json.dumps({'run_id':'stream-api','stream':True,'messages':[{'role':'user','content':'hello'}]}).encode()
         headers={'Authorization':basic(),'Content-Type':'application/json','Content-Length':str(len(body))}
         run=mock.Mock(run_id='stream-api',state=mock.Mock(value='completed'))
-        def execute(messages,run_id,on_delta=None,mode='agent'):
+        def execute(messages,run_id,on_delta=None,mode='agent',owner_id='thor'):
             on_delta('첫'); on_delta('째'); return run,'첫째',[],[]
         with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),mock.patch.object(server.runtime,'run_chat',side_effect=execute),RunningServer() as app:
             status,result_headers,payload=app.request('POST','/api/chat',body,headers)
@@ -123,6 +158,16 @@ class HandlerIntegrationTests(unittest.TestCase):
         self.assertEqual(get_status,200); self.assertTrue(json.loads(get_payload)['events'])
         with server.runtime._runs_lock: server.runtime._runs.pop(run.run_id,None)
 
+    def test_user_cannot_inspect_or_cancel_another_users_active_run(self):
+        run=server.runtime.create_run('alice-active',owner_id='alice')
+        users=json.dumps({'alice':'a-pass','bob':'b-pass'}); body=json.dumps({'run_id':'alice-active'}).encode()
+        headers={'Authorization':basic('b-pass','bob'),'Content-Type':'application/json','Content-Length':str(len(body))}
+        with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password','THOR_MONITOR_USERS_JSON':users},clear=True),RunningServer() as app:
+            get_status,_,_=app.request('GET','/api/chat/runs/alice-active',headers={'Authorization':basic('b-pass','bob')})
+            cancel_status,_,_=app.request('POST','/api/chat/cancel',body,headers)
+        self.assertEqual((get_status,cancel_status),(404,404)); self.assertFalse(run.is_cancelled())
+        with server.runtime._runs_lock: server.runtime._runs.pop(run.run_id,None)
+
     def test_cancel_requires_run_id(self):
         body=b'{}'; headers={'Authorization':basic(),'Content-Type':'application/json','Content-Length':str(len(body))}
         with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),RunningServer() as app:
@@ -131,11 +176,12 @@ class HandlerIntegrationTests(unittest.TestCase):
 
     def test_permission_list_and_decision_endpoints(self):
         approval_id='a'*32; engine=mock.Mock()
-        engine.list.return_value=[{'approval_id':approval_id,'status':'pending'}]
+        engine.list.return_value=[{'approval_id':approval_id,'run_id':'approval-run','status':'pending'}]
         engine.decide.return_value={'approval_id':approval_id,'status':'allowed','scope':'once'}
         body=json.dumps({'decision':'allow','scope':'once'}).encode()
         headers={'Authorization':basic(),'Content-Type':'application/json','Content-Length':str(len(body))}
-        with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),mock.patch.object(server,'permission_engine',engine),RunningServer() as app:
+        store=mock.Mock(); store.get_session.return_value={'run_id':'approval-run','owner_id':'thor'}; store.get_permission_request.return_value={'run_id':'approval-run'}
+        with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),mock.patch.object(server,'permission_engine',engine),mock.patch.object(server,'session_store',store),RunningServer() as app:
             list_status,_,list_body=app.request('GET','/api/chat/approvals?run_id=approval-run&status=pending',headers={'Authorization':basic()})
             decide_status,_,decide_body=app.request('POST','/api/chat/approvals/'+approval_id,body,headers)
         self.assertEqual((list_status,decide_status),(200,200))
@@ -149,7 +195,7 @@ class HandlerIntegrationTests(unittest.TestCase):
             list_status,_,list_body=app.request('GET','/api/chat/permission-grants',headers={'Authorization':basic()})
             delete_status,_,delete_body=app.request('DELETE','/api/chat/permission-grants/7',headers={'Authorization':basic()})
         self.assertEqual((list_status,delete_status),(200,200)); self.assertEqual(json.loads(list_body)['grants'][0]['id'],7)
-        self.assertTrue(json.loads(delete_body)['revoked']); engine.revoke.assert_called_once_with(7)
+        self.assertTrue(json.loads(delete_body)['revoked']); engine.grants.assert_called_once_with('thor'); engine.revoke.assert_called_once_with(7,'thor')
 
     def test_persisted_session_list_and_detail_endpoints(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -174,7 +220,7 @@ class HandlerIntegrationTests(unittest.TestCase):
                 status,_,payload=app.request('POST','/api/chat/sessions/failed-run/resume',body,headers)
         result=json.loads(payload)
         self.assertEqual(status,200); self.assertEqual((result['resumed_from'],result['mode']),('failed-run','plan'))
-        call.assert_called_once_with([{'role':'user','content':'retry'}],'new-run',resumed_from='failed-run',mode='plan')
+        call.assert_called_once_with([{'role':'user','content':'retry'}],'new-run',resumed_from='failed-run',mode='plan',owner_id='thor')
 
     def test_static_path_traversal_returns_404(self):
         with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),RunningServer() as app:

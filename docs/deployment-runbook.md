@@ -122,7 +122,7 @@ THOR_SESSION_DB="$deploy_test_dir/sessions.db" PYTHONDONTWRITEBYTECODE=1 python3
 rm -rf -- "$deploy_test_dir"
 ```
 
-현재 기준은 전체 테스트 159개 통과다. 한 개라도 실패하면 서비스를 재시작하지 않는다.
+현재 기준은 전체 테스트 165개 통과다. 한 개라도 실패하면 서비스를 재시작하지 않는다.
 
 ## 5. 서비스 재시작
 
@@ -183,7 +183,7 @@ SQLite 마이그레이션 버전을 확인한다.
 python3 -c "import sqlite3; db=sqlite3.connect('data/sessions.db'); print(db.execute('SELECT MAX(version) FROM schema_migrations').fetchone()[0]); db.close()"
 ```
 
-현재 예상 버전은 `4`다.
+현재 예상 버전은 `5`다.
 
 읽기 전용 Workspace 도구를 사용할 배포에서는 `thor-monitor.env`에 허용 루트를 명시한다. 여러 루트는 Linux 경로 구분자인 `:`로 구분한다.
 

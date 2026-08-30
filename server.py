@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-import base64, hmac, json, os, re, subprocess, threading, time, urllib.request, urllib.error, urllib.parse, uuid
+import json, os, re, subprocess, threading, time, urllib.request, urllib.error, urllib.parse, uuid
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from agent import models
+from agent.auth import Authenticator
 from agent.runtime import AgentRuntime,RunCancelled,RunLimitError,ServiceBusy,validate_messages,validate_run_id,validate_run_mode
 from agent.permissions import PermissionEngine
 from agent.mcp import MCPConnectionManager
@@ -36,6 +37,7 @@ permission_engine=PermissionEngine(session_store,positive_int_env('THOR_APPROVAL
 mcp_manager=MCPConnectionManager(session_store)
 mcp_tools.configure(mcp_manager)
 notification_service=NotificationService(session_store)
+authenticator=Authenticator()
 
 def image_api_key():
     key = os.environ.get('THOR_IMAGE_API_KEY', '')
@@ -86,7 +88,7 @@ if os.environ.get('THOR_SCHEDULER_ENABLED','0')=='1': scheduler.start()
 
 def agent_chat(messages): return runtime.chat(messages)
 
-def agent_run_chat(messages,run_id=None,mode='agent'): return runtime.run_chat(messages,run_id,mode=mode)
+def agent_run_chat(messages,run_id=None,mode='agent',owner_id='thor'): return runtime.run_chat(messages,run_id,mode=mode,owner_id=owner_id)
 
 def persisted_run_mode(session):
     for event in session.get('events',[]):
@@ -118,16 +120,19 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header('Expires','0')
         super().end_headers()
     def authenticated(self):
-        password = os.environ.get('THOR_MONITOR_PASSWORD', '')
-        if not password:
-            self.send_error(503,'THOR_MONITOR_PASSWORD is not configured'); return False
-        expected = 'Basic ' + base64.b64encode(('thor:' + password).encode()).decode()
-        if hmac.compare_digest(self.headers.get('Authorization',''), expected): return True
-        self.send_response(401); self.send_header('WWW-Authenticate','Basic realm="Jetson Thor Monitor"'); self.end_headers()
-        return False
+        try: user=authenticator.identify(self.headers.get('Authorization',''),self.headers.get('Cookie',''))
+        except ValueError as exc: self.send_error(503,str(exc)); return False
+        if user: self.user_id=user; return True
+        if not authenticator.configured(): self.send_error(503,'authentication is not configured'); return False
+        if self.path.startswith('/api/'):
+            self.send_json(401,{'error':'authentication required'},WWW_Authenticate='Basic realm="Jetson Thor Monitor"'); return False
+        self.send_response(303); self.send_header('Location','/login'); self.end_headers(); return False
     def do_GET(self):
-        if not self.authenticated(): return
         route = self.path.split('?',1)[0]
+        if route == '/login':
+            body=(ROOT/'login.html').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if not self.authenticated(): return
+        if route == '/api/auth/me': json_response(self,200,{'username':self.user_id}); return
         if route == '/api/stats':
             with lock: body = json.dumps({**state, "history": list(history)}).encode()
             self.send_response(200); self.send_header('Content-Type','application/json'); self.send_header('Cache-Control','no-store'); self.end_headers(); self.wfile.write(body); return
@@ -168,19 +173,22 @@ class Handler(SimpleHTTPRequestHandler):
                 try: run_id=validate_run_id(run_id)
                 except ValueError: self.send_error(400); return
             if status not in (None,'pending','allowed','denied','expired','cancelled'): self.send_error(400); return
-            json_response(self,200,{'approvals':permission_engine.list(run_id,status)}); return
+            if run_id is not None and session_store.get_session(run_id,self.user_id) is None: self.send_error(404); return
+            approvals=permission_engine.list(run_id,status)
+            approvals=[item for item in approvals if session_store.get_session(item['run_id'],self.user_id) is not None]
+            json_response(self,200,{'approvals':approvals}); return
         if route == '/api/chat/permission-grants':
-            json_response(self,200,{'grants':permission_engine.grants()}); return
+            json_response(self,200,{'grants':permission_engine.grants(self.user_id)}); return
         if route == '/api/chat/sessions':
             query=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-            try: rows=session_store.list_sessions(query.get('limit',['50'])[0],query.get('offset',['0'])[0])
+            try: rows=session_store.list_sessions(query.get('limit',['50'])[0],query.get('offset',['0'])[0],self.user_id)
             except ValueError: self.send_error(400); return
             json_response(self,200,{'sessions':rows}); return
         if route.startswith('/api/chat/sessions/'):
             run_id=urllib.parse.unquote(route.rsplit('/',1)[-1])
             try: run_id=validate_run_id(run_id)
             except ValueError: self.send_error(400); return
-            session=session_store.get_session(run_id)
+            session=session_store.get_session(run_id,self.user_id)
             if session is None: self.send_error(404); return
             json_response(self,200,session); return
         if route.startswith('/api/chat/runs/'):
@@ -188,8 +196,9 @@ class Handler(SimpleHTTPRequestHandler):
             try: run_id=validate_run_id(run_id)
             except ValueError: self.send_error(400); return
             snapshot=runtime.run_snapshot(run_id)
+            if snapshot is not None and snapshot.get('owner_id','thor')!=self.user_id: snapshot=None
             if snapshot is None:
-                stored=session_store.get_session(run_id)
+                stored=session_store.get_session(run_id,self.user_id)
                 if stored is not None: snapshot={key:stored[key] for key in ('run_id','state','created_at','updated_at','iterations','tool_calls','error')}; snapshot['events']=stored['events']
             if snapshot is None: self.send_error(404); return
             body=json.dumps(snapshot,ensure_ascii=False).encode(); self.send_response(200); self.send_header('Content-Type','application/json'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body); return
@@ -199,8 +208,17 @@ class Handler(SimpleHTTPRequestHandler):
         elif route == '/': self.path = '/index.html'
         return super().do_GET()
     def do_POST(self):
-        if not self.authenticated(): return
         route=self.path.split('?',1)[0]
+        if route == '/api/auth/login':
+            try:
+                incoming=self.read_json_body(4096); username=incoming.get('username',''); password=incoming.get('password','')
+                if not authenticator.verify(username,password): self.send_json(401,{'error':'invalid username or password'}); return
+                token=authenticator.issue(username); self.send_json(200,{'username':username},Set_Cookie=authenticator.cookie(token))
+            except ValueError as exc: self.send_json(503,{'error':str(exc)})
+            return
+        if route == '/api/auth/logout':
+            self.send_json(200,{'logged_out':True},Set_Cookie=authenticator.clear_cookie()); return
+        if not self.authenticated(): return
         if route == '/api/advanced/mcp':
             try:
                 incoming=self.read_json_body(64_000); name=incoming.get('name','')
@@ -256,6 +274,9 @@ class Handler(SimpleHTTPRequestHandler):
                 incoming=self.read_json_body(4096)
                 if 'run_id' not in incoming: raise ValueError('run_id is required')
                 run_id=validate_run_id(incoming['run_id'])
+                existing=runtime.run_snapshot(run_id)
+                if existing is None: existing=session_store.get_session(run_id,self.user_id)
+                if existing is None or existing.get('owner_id','thor')!=self.user_id: self.send_error(404); return
                 snapshot=runtime.cancel(run_id)
                 if snapshot is None: self.send_error(404); return
                 self.send_json(200,snapshot)
@@ -266,6 +287,8 @@ class Handler(SimpleHTTPRequestHandler):
             approval_id=urllib.parse.unquote(route.rsplit('/',1)[-1])
             if not re.fullmatch(r'[0-9a-f]{32}',approval_id): self.send_error(400); return
             try:
+                request=session_store.get_permission_request(approval_id)
+                if request is None or session_store.get_session(request['run_id'],self.user_id) is None: self.send_error(404); return
                 incoming=self.read_json_body(4096)
                 approval=permission_engine.decide(approval_id,incoming.get('decision'),incoming.get('scope','once'))
                 json_response(self,200,approval)
@@ -277,11 +300,11 @@ class Handler(SimpleHTTPRequestHandler):
             try:
                 run_id=validate_run_id(run_id); incoming=self.read_json_body(4096)
                 new_run_id=validate_run_id(incoming.get('run_id'))
-                session=session_store.get_session(run_id)
+                session=session_store.get_session(run_id,self.user_id)
                 if session is None: raise KeyError(run_id)
                 mode=persisted_run_mode(session)
-                messages=validate_messages(session_store.resumable_messages(run_id))
-                run,content,events,sources=runtime.run_chat(messages,new_run_id,resumed_from=run_id,mode=mode)
+                messages=validate_messages(session_store.resumable_messages(run_id,self.user_id))
+                run,content,events,sources=runtime.run_chat(messages,new_run_id,resumed_from=run_id,mode=mode,owner_id=self.user_id)
                 public_events=public_tool_events(events)
                 json_response(self,200,{'run_id':run.run_id,'resumed_from':run_id,'run_state':run.state.value,'mode':mode,'message':{'role':'assistant','content':content},'tools_used':public_events,'sources':sources,'done':True})
             except KeyError: self.send_error(404)
@@ -299,7 +322,7 @@ class Handler(SimpleHTTPRequestHandler):
             mode=validate_run_mode(incoming.get('mode'))
             if incoming.get('stream') is True:
                 self.stream_chat(messages,requested_run_id,mode); return
-            run,content,events,sources=agent_run_chat(messages,requested_run_id,mode)
+            run,content,events,sources=agent_run_chat(messages,requested_run_id,mode,self.user_id)
             public_events=public_tool_events(events)
             body=(json.dumps({'run_id':run.run_id,'run_state':run.state.value,'mode':mode,'message':{'role':'assistant','content':content},'tools_used':public_events,'sources':sources,'done':True},ensure_ascii=False)+'\n').encode()
             self.send_response(200); self.send_header('Content-Type','application/x-ndjson; charset=utf-8'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
@@ -322,7 +345,7 @@ class Handler(SimpleHTTPRequestHandler):
             self.wfile.write((json.dumps(value,ensure_ascii=False)+'\n').encode()); self.wfile.flush()
         try:
             send({'type':'start','run_id':run_id,'mode':mode})
-            run,content,events,sources=runtime.run_chat(messages,run_id,on_delta=lambda delta:send({'type':'delta','run_id':run_id,'message':{'role':'assistant','content':delta}}),mode=mode)
+            run,content,events,sources=runtime.run_chat(messages,run_id,on_delta=lambda delta:send({'type':'delta','run_id':run_id,'message':{'role':'assistant','content':delta}}),mode=mode,owner_id=self.user_id)
             public_events=public_tool_events(events)
             send({'type':'final','run_id':run.run_id,'run_state':run.state.value,'mode':mode,'message':{'role':'assistant','content':''},'final_content':content,'tools_used':public_events,'sources':sources,'done':True})
         except Exception as exc:
@@ -356,7 +379,7 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_error(404); return
         value=route.rsplit('/',1)[-1]
         if not value.isdigit(): self.send_error(400); return
-        if not permission_engine.revoke(int(value)): self.send_error(404); return
+        if not permission_engine.revoke(int(value),self.user_id): self.send_error(404); return
         json_response(self,200,{'revoked':True,'grant_id':int(value)})
     def read_json_body(self,max_bytes):
         length=int(self.headers.get('Content-Length','0'))

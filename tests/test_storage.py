@@ -25,7 +25,7 @@ class StorageTests(unittest.TestCase):
 
     def test_migration_can_upgrade_rollback_and_upgrade_again(self):
         with self.store.connect() as db:
-            self.assertEqual(db.execute('SELECT MAX(version) FROM schema_migrations').fetchone()[0],4)
+            self.assertEqual(db.execute('SELECT MAX(version) FROM schema_migrations').fetchone()[0],5)
             self.assertIsNotNone(db.execute("SELECT name FROM sqlite_master WHERE name='sessions'").fetchone())
 
     def test_failed_migration_rolls_back_schema_and_version(self):
@@ -54,6 +54,15 @@ class StorageTests(unittest.TestCase):
         self.assertTrue(restored['events']); self.assertEqual(len(restored['tools']),1)
         self.assertNotIn('argument-secret',str(restored)); self.assertNotIn('tool-secret',str(restored))
 
+    def test_sessions_are_filtered_by_owner(self):
+        now=time.time()
+        for owner in ('alice','bob'):
+            snapshot={'run_id':owner+'-run','owner_id':owner,'state':'completed','created_at':now,'updated_at':now,'iterations':1,'tool_calls':0,'error':None,'events':[]}
+            self.store.create_session(snapshot,[{'role':'user','content':owner}])
+        self.assertEqual([row['run_id'] for row in self.store.list_sessions(owner_id='alice')],['alice-run'])
+        self.assertIsNotNone(self.store.get_session('alice-run','alice'))
+        self.assertIsNone(self.store.get_session('alice-run','bob'))
+
     def test_interrupted_run_is_recovered_and_can_supply_resume_messages(self):
         snapshot={'run_id':'interrupted','state':'planning','created_at':time.time(),'updated_at':time.time(),'iterations':1,'tool_calls':0,'error':None,'events':[]}
         self.store.create_session(snapshot,[{'role':'user','content':'continue this'}])
@@ -81,6 +90,13 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(len(grants),1); self.assertIsNone(grants[0]['run_id'])
         self.assertTrue(self.store.revoke_permission_grant(grants[0]['id']))
         self.assertEqual(self.store.list_permission_grants(),[])
+
+    def test_permission_grants_are_isolated_by_owner(self):
+        self.store.save_permission_grant('always_tool','alice-run','python_execute','elevated','alice')
+        self.assertIsNotNone(self.store.find_permission_grant('alice-run','python_execute','elevated','alice'))
+        self.assertIsNone(self.store.find_permission_grant('bob-run','python_execute','elevated','bob'))
+        self.assertEqual(len(self.store.list_permission_grants('alice')),1)
+        self.assertEqual(self.store.list_permission_grants('bob'),[])
 
     def test_permission_decision_and_grant_are_atomic(self):
         now=time.time(); snapshot={'run_id':'atomic-permission','state':'awaiting_approval','created_at':now,'updated_at':now,'iterations':1,'tool_calls':1,'error':None,'events':[]}

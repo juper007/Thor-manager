@@ -27,6 +27,9 @@ Edit `thor-monitor.env` before installing the service. The included `thor-monito
 
 ```ini
 THOR_MONITOR_PASSWORD=replace-with-a-strong-password
+THOR_MONITOR_USERS_JSON='{"alice":"replace-with-alice-password"}'
+THOR_AUTH_SECRET=replace-with-a-long-random-cookie-signing-secret
+THOR_AUTH_COOKIE_SECURE=0
 THOR_IMAGE_API_KEY=replace-with-the-image-api-key
 THOR_AI_CONCURRENCY=1
 THOR_SESSION_DB=/home/juper007/thor-monitor/data/sessions.db
@@ -49,6 +52,8 @@ sudo cp thor-monitor.service /etc/systemd/system/thor-monitor.service
 sudo systemctl daemon-reload
 sudo systemctl restart thor-monitor.service
 ```
+
+`THOR_MONITOR_PASSWORD` remains the password for the built-in `thor` account. Add users with `THOR_MONITOR_USERS_JSON`; each username receives an isolated chat-session history. Browser login uses an HttpOnly, SameSite cookie signed by `THOR_AUTH_SECRET`. Set `THOR_AUTH_COOKIE_SECURE=1` only when the site is served over HTTPS. Basic authentication remains available for API clients using any configured username and password.
 
 Copy `qwen-image/qwen-image.env.example` to `qwen-image/qwen-image.env` and replace the placeholder before starting the image service. Environment files and generated model artifacts are intentionally excluded from Git.
 

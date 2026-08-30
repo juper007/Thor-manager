@@ -1,0 +1,1 @@
+.auth-logout{border:1px solid var(--line);background:transparent;color:var(--muted);padding:7px 9px;font:700 9px monospace;cursor:pointer}.auth-logout:hover{border-color:var(--green);color:var(--text)}
