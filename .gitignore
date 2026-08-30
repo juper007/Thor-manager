@@ -10,6 +10,7 @@ thor-password.txt
 !*.env.example
 
 # Generated model outputs and test artifacts
+generated/
 qwen-image/outputs/
 qwen-image/models/
 qwen-image/*.png
