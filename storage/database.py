@@ -166,7 +166,9 @@ class SessionStore:
     def list_sessions(self,limit=50,offset=0):
         limit=max(1,min(int(limit),100)); offset=max(0,int(offset))
         with self.connect() as db:
-            return [dict(row) for row in db.execute('SELECT run_id,state,created_at,updated_at,iterations,tool_calls,error,final_answer,resumed_from FROM sessions ORDER BY updated_at DESC LIMIT ? OFFSET ?',(limit,offset))]
+            return [dict(row) for row in db.execute("""SELECT s.run_id,s.state,s.created_at,s.updated_at,s.iterations,s.tool_calls,s.error,s.final_answer,s.resumed_from,
+                COALESCE((SELECT json_extract(e.payload_json,'$.mode') FROM run_events e WHERE e.run_id=s.run_id AND e.type='run.mode' ORDER BY e.sequence LIMIT 1),'agent') AS mode
+                FROM sessions s ORDER BY s.updated_at DESC LIMIT ? OFFSET ?""",(limit,offset))]
 
     def recover_interrupted(self):
         now=time.time(); message='server restarted before the run reached a terminal state'

@@ -76,6 +76,8 @@ DELETE /api/chat/permission-grants/{grant_id}
 
 Only failed or cancelled sessions can be resumed. Retention defaults to 30 days while preserving the 100 most recently updated sessions. Credential-like fields and inline secrets are redacted before storage.
 
+The AI Workspace lists recent sessions in pages of 20. Selecting one restores its messages, run mode, plan, tool cards, diffs, and test results. Failed and cancelled sessions expose a Resume action that preserves the stored run mode and creates a linked run.
+
 Read tools run automatically. Safe-write, elevated, and destructive tools wait for an authenticated approval before execution. Waiting releases AI concurrency capacity so unrelated chats can continue. Approval requests expire after `THOR_APPROVAL_TTL_SECONDS`; the default is 300 seconds. The engine records the exact argument hash and refuses execution if arguments change after approval. `once` applies to one request, `session` grants the same tool for that run, and `always_tool` persists for future runs until revoked through the permission-grants API. Denying a tool blocks further attempts to use that tool in the same run.
 
 ## Read-only workspace tools

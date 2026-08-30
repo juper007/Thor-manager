@@ -79,8 +79,20 @@ class UIContractTests(unittest.TestCase):
             with self.subTest(marker=marker): self.assertIn(marker,self.script)
         for marker in ('.test-result.passed','.test-result.failed','.test-result.truncated','.test-output.stderr'):
             with self.subTest(marker=marker): self.assertIn(marker,self.agent_css)
-        self.assertIn('/ai-agent.css?v=11',self.page)
+        self.assertIn('/ai-agent.css?v=12',self.page)
         self.assertIn('/ai-workspace.js?v=12',self.page)
+
+    def test_session_browser_and_resume_contract(self):
+        for marker in ('id="sessionList"','id="refreshSessions"','id="moreSessions"'):
+            with self.subTest(marker=marker): self.assertIn(marker,self.page)
+        for marker in ('function loadSessions','function openSession','function resumeStoredSession',"'/api/chat/sessions?limit=20&offset='","'/resume'"):
+            with self.subTest(marker=marker): self.assertIn(marker,self.script)
+        self.assertIn('renderStoredMessages',self.script)
+        self.assertIn('renderRunDiffs(session.events||[])',self.script)
+        self.assertIn('renderTestResults(session.events||[])',self.script)
+        self.assertIn('if(!await openSession(runId))return',self.script)
+        self.assertIn("history.at(-1)?.role==='assistant'",self.script)
+        self.assertIn('/ai-agent.css?v=12',self.page)
 
     def test_agent_approval_dialog_contract(self):
         for marker in ('id="approvalModal"','id="approvalScope"','id="allowApproval"','id="denyApproval"'):

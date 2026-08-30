@@ -160,6 +160,7 @@ class HandlerIntegrationTests(unittest.TestCase):
                 get_status,_,get_body=app.request('GET','/api/chat/sessions/stored',headers={'Authorization':basic()})
         self.assertEqual((list_status,get_status),(200,200))
         self.assertEqual(json.loads(list_body)['sessions'][0]['run_id'],'stored')
+        self.assertEqual(json.loads(list_body)['sessions'][0]['mode'],'agent')
         self.assertEqual(json.loads(get_body)['messages'][0]['content'],'hello')
 
     def test_failed_session_can_be_resumed(self):
