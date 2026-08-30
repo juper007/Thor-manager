@@ -230,6 +230,22 @@ class AgentRuntime:
             raise RunLimitError(f'{phase} produced another tool call')
         return answer
 
+    def _execute_tool_call(self,run,call,allowed_tools,started,release_capacity,reacquire_capacity):
+        name=call['name']; arguments=call['arguments']
+        known_spec=self.registry.get(name) if hasattr(self.registry,'get') else None
+        if known_spec is not None and allowed_tools is not None and name not in allowed_tools:
+            return {'name':name,'arguments':arguments,'status':'error','result':None,
+                'error':f'{name} is not allowed by the active skill','error_code':'skill_tool_not_allowed','seconds':0,'truncated':False}
+        permission=None
+        if self.permission_engine is not None and known_spec is not None:
+            permission=self.permission_engine.authorize(run,known_spec,arguments,run.is_cancelled,
+                max(.01,self.total_timeout-(time.monotonic()-started)),release_capacity,reacquire_capacity)
+        self._check_active(run,started)
+        if permission is not None and not permission['allowed']:
+            return {'name':name,'arguments':arguments,'status':'error','result':None,
+                'error':permission['error'],'error_code':permission['error_code'],'seconds':0,'truncated':False}
+        return self.registry.execute(name,arguments)
+
     def _run(self,run,messages,started,release_capacity=lambda:None,reacquire_capacity=lambda:None,on_delta=None,mode='agent'):
         mode_instruction={
             'ask':'Answer the user directly without calling or suggesting any tool calls.',
@@ -273,21 +289,7 @@ class AgentRuntime:
                     event=tool_cache[cache_key]; duplicate_count+=1; run.emit('tool.reused',{'name':call['name']})
                 else:
                     run.increment_tool_calls(); run.emit('tool.started',{'name':call['name'],'arguments':call['arguments']})
-                    permission=None; known_spec=self.registry.get(call['name']) if hasattr(self.registry,'get') else None
-                    blocked_by_skill=known_spec is not None and allowed_tools is not None and call['name'] not in allowed_tools
-                    spec=known_spec if self.permission_engine is not None else None
-                    if blocked_by_skill:
-                        event={'name':call['name'],'arguments':call['arguments'],'status':'error','result':None,
-                            'error':f'{call["name"]} is not allowed by the active skill','error_code':'skill_tool_not_allowed','seconds':0,'truncated':False}
-                    else:
-                        if spec is not None:
-                            permission=self.permission_engine.authorize(run,spec,call['arguments'],run.is_cancelled,
-                                max(.01,self.total_timeout-(time.monotonic()-started)),release_capacity,reacquire_capacity)
-                        self._check_active(run,started)
-                        if permission is not None and not permission['allowed']:
-                            event={'name':call['name'],'arguments':call['arguments'],'status':'error','result':None,
-                                'error':permission['error'],'error_code':permission['error_code'],'seconds':0,'truncated':False}
-                        else: event=self.registry.execute(call['name'],call['arguments'])
+                    event=self._execute_tool_call(run,call,allowed_tools,started,release_capacity,reacquire_capacity)
                     tool_cache[cache_key]=event; events.append(event)
                     if self.session_store is not None: self.session_store.record_tool_execution(run.run_id,len(events),event)
                     run.emit('tool.completed',tool_completion_payload(call,event))

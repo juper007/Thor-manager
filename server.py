@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-import base64, hmac, json, os, re, shutil, socket, subprocess, threading, time, urllib.request, urllib.error, urllib.parse, uuid
-from collections import deque
+import base64, hmac, json, os, re, threading, time, urllib.request, urllib.error, urllib.parse, uuid
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from agent import models
 from agent.runtime import AgentRuntime,RunCancelled,RunLimitError,ServiceBusy,validate_messages,validate_run_id,validate_run_mode
 from agent.permissions import PermissionEngine
+from monitoring import collector,cpu_percent,disk_net,gpu_utilization,history,lock,parse,read_text,state
 from storage import SessionStore
 import agent_tools
 
@@ -17,9 +17,6 @@ def positive_int_env(name,default):
     except ValueError: return default
 
 
-state = {"timestamp": 0, "cpu": 0, "gpu": 0, "memory": {}, "temps": {}, "power": {}, "clocks": [], "raw": ""}
-history = deque(maxlen=300)
-lock = threading.Lock()
 IMAGE_API = 'http://127.0.0.1:8188'
 GENERATED_DIR = ROOT / 'generated'
 GENERATED_DIR.mkdir(exist_ok=True)
@@ -76,77 +73,20 @@ def json_response(handler,status,value):
     handler.send_response(status); handler.send_header('Content-Type','application/json; charset=utf-8')
     handler.send_header('Content-Length',str(len(body))); handler.end_headers(); handler.wfile.write(body)
 
-def read_text(path, default=""):
-    try: return Path(path).read_text().strip()
-    except OSError: return default
-
-def cpu_percent():
-    vals = list(map(int, read_text('/proc/stat').splitlines()[0].split()[1:]))
-    idle, total = vals[3] + vals[4], sum(vals)
-    prev = getattr(cpu_percent, 'prev', (idle, total)); cpu_percent.prev = (idle, total)
-    return round(100 * (1 - (idle-prev[0]) / max(1, total-prev[1])), 1)
-
-def gpu_utilization():
-    try:
-        out = subprocess.check_output(['nvidia-smi','--query-gpu=utilization.gpu,utilization.memory','--format=csv,noheader,nounits'], text=True, timeout=.8)
-        values = [int(float(v.strip())) for v in out.splitlines()[0].split(',')]
-        return values[0], values[1]
-    except (OSError, subprocess.SubprocessError, ValueError, IndexError): return 0, 0
-
-def parse(line):
-    item = {"timestamp": int(time.time()*1000), "raw": line, "cpu": cpu_percent()}
-    ram = re.search(r'RAM\s+(\d+)/(\d+)MB', line)
-    if ram:
-        used, total = map(int, ram.groups()); item["memory"] = {"used": used, "total": total, "percent": round(used*100/total,1)}
-    cpus = re.search(r'CPU \[(.*?)\]', line)
-    item["clocks"] = [int(x) for x in re.findall(r'@(\d+)', cpus.group(1))] if cpus else []
-    item["gpu"], item["gpu_memory"] = gpu_utilization()
-    gpu_match = re.search(r'(?:GR3D_FREQ|GPU)\s+(\d+)%', line)
-    if gpu_match: item["gpu"] = int(gpu_match.group(1))
-    item["temps"] = {k: float(v) for k,v in re.findall(r'(cpu|gpu|tj|soc\d+)@([\d.]+)C', line)}
-    item["power"] = {k: int(v) for k,v in re.findall(r'(VDD_GPU|VDD_CPU_SOC_MSS|VIN(?:_SYS_5V0)?)\s+(\d+)mW', line)}
-    return item
-
-def disk_net():
-    disk = shutil.disk_usage('/')
-    net = {}
-    for row in read_text('/proc/net/dev').splitlines()[2:]:
-        name, values = row.split(':',1); nums = values.split()
-        if name.strip() != 'lo': net[name.strip()] = {"rx": int(nums[0]), "tx": int(nums[8])}
-    mi = {}
-    for row in read_text('/proc/meminfo').splitlines():
-        if ':' in row:
-            key, value = row.split(':', 1)
-            try: mi[key] = int(value.strip().split()[0]) * 1024
-            except (ValueError, IndexError): pass
-    total, available = mi.get('MemTotal',0), mi.get('MemAvailable',0)
-    detail = {"total":total,"available":available,"used":max(0,total-available),"free":mi.get('MemFree',0),
-        "buffers":mi.get('Buffers',0),"cached":mi.get('Cached',0)+mi.get('SReclaimable',0),"shared":mi.get('Shmem',0),
-        "swap_total":mi.get('SwapTotal',0),"swap_used":max(0,mi.get('SwapTotal',0)-mi.get('SwapFree',0))}
-    procs = []
-    for p in Path('/proc').iterdir():
-        if not p.name.isdigit(): continue
-        try:
-            status=(p/'status').read_text(); name=re.search(r'^Name:\s+(.+)$',status,re.M).group(1)
-            rss=int(re.search(r'^VmRSS:\s+(\d+)',status,re.M).group(1))*1024
-            if rss: procs.append({"pid":int(p.name),"name":name,"rss":rss})
-        except (OSError, AttributeError): pass
-    detail['processes']=sorted(procs,key=lambda x:x['rss'],reverse=True)[:8]
-    return {"disk": {"used": disk.used, "total": disk.total, "percent": round(disk.used*100/disk.total,1)}, "network": net, "memory_detail": detail,
-            "uptime": float(read_text('/proc/uptime','0').split()[0]), "hostname": socket.gethostname(), "load": list(os.getloadavg())}
-
-def collector():
-    while True:
-        try:
-            proc = subprocess.Popen(['tegrastats','--interval','1000'], stdout=subprocess.PIPE, text=True)
-            for line in proc.stdout:
-                item = parse(line.strip()); item.update(disk_net())
-                with lock: state.update(item); history.append({k:item.get(k) for k in ('timestamp','cpu','gpu','memory','temps','power')})
-        except Exception as e:
-            with lock: state.update({"timestamp":int(time.time()*1000), "error":str(e), **disk_net()})
-            time.sleep(2)
+def public_tool_events(events):
+    return [{key:event.get(key) for key in ('name','arguments','seconds','error')} for event in events]
 
 class Handler(SimpleHTTPRequestHandler):
+    def send_json(self,status,value,**headers):
+        body=json.dumps(value,ensure_ascii=False).encode()
+        self.send_response(status); self.send_header('Content-Type','application/json; charset=utf-8')
+        self.send_header('Content-Length',str(len(body)))
+        for name,value in headers.items(): self.send_header(name.replace('_','-'),str(value))
+        self.end_headers(); self.wfile.write(body)
+
+    def send_chat_error(self,status,error,**headers):
+        self.send_json(status,{'error':str(error),'done':True},**headers)
+
     def end_headers(self):
         self.send_header('Cache-Control','no-store, no-cache, must-revalidate, max-age=0')
         self.send_header('Pragma','no-cache')
@@ -230,9 +170,9 @@ class Handler(SimpleHTTPRequestHandler):
                 run_id=validate_run_id(incoming['run_id'])
                 snapshot=runtime.cancel(run_id)
                 if snapshot is None: self.send_error(404); return
-                body=json.dumps(snapshot,ensure_ascii=False).encode(); self.send_response(200); self.send_header('Content-Type','application/json'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
+                self.send_json(200,snapshot)
             except ValueError as e:
-                body=json.dumps({'error':str(e)}).encode(); self.send_response(400); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body)
+                self.send_json(400,{'error':str(e)})
             return
         if route.startswith('/api/chat/approvals/'):
             approval_id=urllib.parse.unquote(route.rsplit('/',1)[-1])
@@ -254,7 +194,7 @@ class Handler(SimpleHTTPRequestHandler):
                 mode=persisted_run_mode(session)
                 messages=validate_messages(session_store.resumable_messages(run_id))
                 run,content,events,sources=runtime.run_chat(messages,new_run_id,resumed_from=run_id,mode=mode)
-                public_events=[{'name':e['name'],'arguments':e['arguments'],'seconds':e['seconds'],'error':e['error']} for e in events]
+                public_events=public_tool_events(events)
                 json_response(self,200,{'run_id':run.run_id,'resumed_from':run_id,'run_state':run.state.value,'mode':mode,'message':{'role':'assistant','content':content},'tools_used':public_events,'sources':sources,'done':True})
             except KeyError: self.send_error(404)
             except ValueError as e: json_response(self,400,{'error':str(e),'done':True})
@@ -272,21 +212,21 @@ class Handler(SimpleHTTPRequestHandler):
             if incoming.get('stream') is True:
                 self.stream_chat(messages,requested_run_id,mode); return
             run,content,events,sources=agent_run_chat(messages,requested_run_id,mode)
-            public_events=[{'name':e['name'],'arguments':e['arguments'],'seconds':e['seconds'],'error':e['error']} for e in events]
+            public_events=public_tool_events(events)
             body=(json.dumps({'run_id':run.run_id,'run_state':run.state.value,'mode':mode,'message':{'role':'assistant','content':content},'tools_used':public_events,'sources':sources,'done':True},ensure_ascii=False)+'\n').encode()
             self.send_response(200); self.send_header('Content-Type','application/x-ndjson; charset=utf-8'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
         except ValueError as e:
-            body=json.dumps({'error':str(e),'done':True}).encode(); self.send_response(400); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body)
+            self.send_chat_error(400,e)
         except ServiceBusy as e:
-            body=json.dumps({'error':str(e),'done':True}).encode(); self.send_response(429); self.send_header('Content-Type','application/json'); self.send_header('Retry-After','5'); self.end_headers(); self.wfile.write(body)
+            self.send_chat_error(429,e,Retry_After=5)
         except RunCancelled as e:
-            body=json.dumps({'error':str(e),'done':True}).encode(); self.send_response(409); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body)
+            self.send_chat_error(409,e)
         except RunLimitError as e:
-            body=json.dumps({'error':str(e),'done':True}).encode(); self.send_response(408); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body)
+            self.send_chat_error(408,e)
         except urllib.error.HTTPError as e:
-            detail=e.read().decode(errors='replace')[:1000]; body=json.dumps({'error':detail,'done':True}).encode(); self.send_response(502); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body)
+            self.send_chat_error(502,e.read().decode(errors='replace')[:1000])
         except Exception as e:
-            body=json.dumps({'error':str(e),'done':True}).encode(); self.send_response(502); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body)
+            self.send_chat_error(502,e)
     def stream_chat(self,messages,run_id,mode='agent'):
         self.send_response(200); self.send_header('Content-Type','application/x-ndjson; charset=utf-8')
         self.send_header('X-Accel-Buffering','no'); self.send_header('Connection','close'); self.end_headers()
@@ -295,7 +235,7 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             send({'type':'start','run_id':run_id,'mode':mode})
             run,content,events,sources=runtime.run_chat(messages,run_id,on_delta=lambda delta:send({'type':'delta','run_id':run_id,'message':{'role':'assistant','content':delta}}),mode=mode)
-            public_events=[{'name':e['name'],'arguments':e['arguments'],'seconds':e['seconds'],'error':e['error']} for e in events]
+            public_events=public_tool_events(events)
             send({'type':'final','run_id':run.run_id,'run_state':run.state.value,'mode':mode,'message':{'role':'assistant','content':''},'final_content':content,'tools_used':public_events,'sources':sources,'done':True})
         except Exception as exc:
             try: send({'type':'error','run_id':run_id,'error':str(exc),'done':True})

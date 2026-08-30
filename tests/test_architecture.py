@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest import mock
 
 import agent_tools
+import monitoring
 import server
 from agent import models
 from agent.runtime import AgentRuntime
@@ -31,6 +32,11 @@ class ModuleBoundaryTests(unittest.TestCase):
         self.assertNotIn('for _ in range(3)',inspect.getsource(server))
         self.assertIn('self.max_iterations',inspect.getsource(AgentRuntime))
         self.assertNotIn('import agent_tools',inspect.getsource(__import__('agent.runtime',fromlist=['AgentRuntime'])))
+
+    def test_server_delegates_telemetry_collection(self):
+        source=inspect.getsource(server)
+        self.assertIs(server.collector,monitoring.collector)
+        self.assertNotIn("subprocess.Popen(['tegrastats'",source)
 
     def test_service_environment_file_matches_documented_example(self):
         root=Path(__file__).resolve().parents[1]
