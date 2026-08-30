@@ -11,6 +11,7 @@ class UIContractTests(unittest.TestCase):
         cls.script=(ROOT/'ai-workspace.js').read_text(encoding='utf-8')
         cls.page=(ROOT/'ai-workspace.html').read_text(encoding='utf-8')
         cls.agent_css=(ROOT/'ai-agent.css').read_text(encoding='utf-8')
+        cls.accessibility_css=(ROOT/'ai-accessibility.css').read_text(encoding='utf-8')
 
     def test_markdown_renderer_contract(self):
         required=(
@@ -79,7 +80,7 @@ class UIContractTests(unittest.TestCase):
             with self.subTest(marker=marker): self.assertIn(marker,self.script)
         for marker in ('.test-result.passed','.test-result.failed','.test-result.truncated','.test-output.stderr'):
             with self.subTest(marker=marker): self.assertIn(marker,self.agent_css)
-        self.assertIn('/ai-agent.css?v=12',self.page)
+        self.assertIn('/ai-agent.css?v=13',self.page)
         self.assertIn('/ai-workspace.js?v=12',self.page)
 
     def test_session_browser_and_resume_contract(self):
@@ -92,7 +93,31 @@ class UIContractTests(unittest.TestCase):
         self.assertIn('renderTestResults(session.events||[])',self.script)
         self.assertIn('if(!await openSession(runId))return',self.script)
         self.assertIn("history.at(-1)?.role==='assistant'",self.script)
-        self.assertIn('/ai-agent.css?v=12',self.page)
+        self.assertIn('/ai-agent.css?v=13',self.page)
+
+    def test_mobile_workspace_contract(self):
+        for marker in ('@media(max-width:720px)','100dvh','overscroll-behavior:contain','max-width:min(78%,75ch)','min-height:44px'):
+            with self.subTest(marker=marker): self.assertIn(marker,self.accessibility_css)
+        self.assertIn('@media(max-width:420px)',self.accessibility_css)
+        self.assertIn('@media(prefers-reduced-motion:reduce)',self.accessibility_css)
+
+    def test_keyboard_and_accessibility_contract(self):
+        for marker in ('class="skip-link"','role="tablist"','role="tab"','aria-selected="true"','/ai-accessibility.css?v=13'):
+            with self.subTest(marker=marker): self.assertIn(marker,self.page)
+        for marker in ('function selectWorkspaceTab','ArrowLeft','ArrowRight',"open.className='session-open'","open.type='button'",'function trapApprovalFocus',"event.key==='Escape'","event.key!=='Tab'","document.body.classList.add('modal-open')","setAttribute('aria-busy','true')","setAttribute('aria-busy','false')"):
+            with self.subTest(marker=marker): self.assertIn(marker,self.script)
+        self.assertIn('filter(item=>item.offsetParent!==null)',self.script)
+        self.assertIn("$('messages').tabIndex=-1",self.script)
+        self.assertNotIn("row.setAttribute('role','button')",self.script)
+        self.assertIn('if(!approvalDecisionPending)',self.script)
+        self.assertIn('if(!currentApproval||approvalDecisionPending)return',self.script)
+
+    def test_stage_eight_completion_contract(self):
+        self.assertIn("if(activeRunId!==runId)return",self.script)
+        self.assertIn("else if(currentApproval?.run_id===runId)closeApproval(true)",self.script)
+        self.assertIn('renderRunPlan(session.events||[])',self.script)
+        self.assertIn('requestAnimationFrame',self.script)
+        self.assertIn('max-height:310px;overflow:auto',self.agent_css)
 
     def test_agent_approval_dialog_contract(self):
         for marker in ('id="approvalModal"','id="approvalScope"','id="allowApproval"','id="denyApproval"'):
