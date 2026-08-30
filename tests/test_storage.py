@@ -63,6 +63,26 @@ class StorageTests(unittest.TestCase):
         self.assertIsNotNone(self.store.get_session('alice-run','alice'))
         self.assertIsNone(self.store.get_session('alice-run','bob'))
 
+    def test_delete_conversation_is_owner_scoped_and_cascades(self):
+        now=time.time(); snapshot={'run_id':'alice-run','owner_id':'alice','state':'completed','created_at':now,'updated_at':now,'iterations':1,'tool_calls':0,'error':None,'events':[]}
+        self.store.create_session(snapshot,[{'role':'user','content':'delete me'}],conversation_id='alice-chat')
+        self.store.save_permission_grant('session','alice-run','python_execute','elevated','alice')
+        self.store.save_permission_grant('always_tool','alice-run','file_read','read','alice')
+        self.store.record_usage('tool_calls',1,'alice-run')
+        self.assertFalse(self.store.delete_conversation('alice-chat','bob'))
+        self.assertEqual(self.store.delete_conversation('alice-chat','alice'),('alice-run',))
+        self.assertIsNone(self.store.get_session('alice-run','alice'))
+        with self.store.connect() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM messages WHERE run_id=?',('alice-run',)).fetchone()[0],0)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM usage_samples WHERE run_id=?',('alice-run',)).fetchone()[0],0)
+        grants=self.store.list_permission_grants('alice')
+        self.assertEqual([(item['scope'],item['tool_name']) for item in grants],[('always_tool','file_read')])
+
+    def test_delete_conversation_rejects_active_run(self):
+        now=time.time(); snapshot={'run_id':'active-run','owner_id':'alice','state':'planning','created_at':now,'updated_at':now,'iterations':1,'tool_calls':0,'error':None,'events':[]}
+        self.store.create_session(snapshot,[{'role':'user','content':'working'}],conversation_id='active-chat')
+        with self.assertRaisesRegex(ValueError,'active conversation'): self.store.delete_conversation('active-chat','alice')
+
     def test_conversation_groups_multiple_runs_without_duplicate_history(self):
         first={'run_id':'run-one','owner_id':'alice','state':'completed','created_at':1.0,'updated_at':1.0,'iterations':1,'tool_calls':0,'error':None,'events':[]}
         self.store.create_session(first,[{'role':'user','content':'first'}],conversation_id='conversation-one'); self.store.complete_session(first,'answer one')

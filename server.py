@@ -407,6 +407,17 @@ class Handler(SimpleHTTPRequestHandler):
     def do_DELETE(self):
         if not self.authenticated(): return
         route=self.path.split('?',1)[0]
+        if route.startswith('/api/chat/sessions/'):
+            conversation_id=urllib.parse.unquote(route.rsplit('/',1)[-1])
+            try:
+                conversation_id=validate_run_id(conversation_id)
+                deleted_run_ids=session_store.delete_conversation(conversation_id,self.user_id)
+            except ValueError as exc: self.send_json(409,{'error':str(exc)}); return
+            if not deleted_run_ids: self.send_error(404)
+            else:
+                runtime.forget_runs(deleted_run_ids,self.user_id)
+                self.send_json(200,{'deleted':True,'conversation_id':conversation_id})
+            return
         if route.startswith('/api/admin/users/'):
             if not authenticator.is_admin(self.user_id): self.send_error(403); return
             username=urllib.parse.unquote(route.rsplit('/',1)[-1])

@@ -115,6 +115,15 @@ class AgentRuntime:
     def get_run(self,run_id):
         with self._runs_lock: return self._runs.get(run_id)
 
+    def forget_runs(self,run_ids,owner_id):
+        removed=[]
+        with self._runs_lock:
+            for run_id in run_ids:
+                run=self._runs.get(run_id)
+                if run is not None and run.owner_id==owner_id and run.is_terminal():
+                    del self._runs[run_id]; removed.append(run_id)
+        return tuple(removed)
+
     def run_snapshot(self,run_id,include_events=True):
         run=self.get_run(run_id)
         return run.snapshot(include_events) if run else None

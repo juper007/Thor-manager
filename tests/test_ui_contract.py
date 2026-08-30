@@ -90,8 +90,8 @@ class UIContractTests(unittest.TestCase):
             with self.subTest(marker=marker): self.assertIn(marker,self.script)
         for marker in ('.test-result.passed','.test-result.failed','.test-result.truncated','.test-output.stderr'):
             with self.subTest(marker=marker): self.assertIn(marker,self.agent_css)
-        self.assertIn('/ai-agent.css?v=13',self.page)
-        self.assertIn('/ai-workspace.js?v=13',self.page)
+        self.assertIn('/ai-agent.css?v=14',self.page)
+        self.assertIn('/ai-workspace.js?v=14',self.page)
         self.assertIn('/auth-ui.js?v=1',self.page)
         self.assertIn('id="authUser"',self.page); self.assertIn('id="logout"',self.page)
 
@@ -105,16 +105,26 @@ class UIContractTests(unittest.TestCase):
         self.assertIn('renderTestResults(session.events||[])',self.script)
         self.assertIn('if(!await openSession(runId))return',self.script)
         self.assertIn("history.at(-1)?.role==='assistant'",self.script)
-        self.assertIn('/ai-agent.css?v=13',self.page)
+        self.assertIn('function deleteStoredSession',self.script)
+        self.assertIn("method:'DELETE'",self.script)
+        self.assertIn('deletingSessionIds.has(runId)',self.script)
+        self.assertNotIn('if(activeRunId||deletingSessionIds.has(runId)',self.script)
+        self.assertIn("catch(error){alert('DELETE ERROR · '+error.message)}",self.script)
+        self.assertIn('finally{deletingSessionIds.delete(runId)',self.script)
+        self.assertIn('id="clearChat">＋ NEW SESSION</button>',self.page)
+        self.assertNotIn('id="messageCount"',self.page)
+        self.assertNotIn('ACTIVE SKILLS',self.page)
+        self.assertIn('/ai-agent.css?v=14',self.page)
 
     def test_mobile_workspace_contract(self):
         for marker in ('@media(max-width:720px)','100dvh','overscroll-behavior:contain','max-width:min(78%,75ch)','min-height:44px'):
             with self.subTest(marker=marker): self.assertIn(marker,self.accessibility_css)
         self.assertIn('@media(max-width:420px)',self.accessibility_css)
+        self.assertIn('.session-item .session-delete{width:44px;height:44px}',self.accessibility_css)
         self.assertIn('@media(prefers-reduced-motion:reduce)',self.accessibility_css)
 
     def test_keyboard_and_accessibility_contract(self):
-        for marker in ('class="skip-link"','role="tablist"','role="tab"','aria-selected="true"','/ai-accessibility.css?v=13'):
+        for marker in ('class="skip-link"','role="tablist"','role="tab"','aria-selected="true"','/ai-accessibility.css?v=14'):
             with self.subTest(marker=marker): self.assertIn(marker,self.page)
         for marker in ('function selectWorkspaceTab','ArrowLeft','ArrowRight',"open.className='session-open'","open.type='button'",'function trapApprovalFocus',"event.key==='Escape'","event.key!=='Tab'","document.body.classList.add('modal-open')","setAttribute('aria-busy','true')","setAttribute('aria-busy','false')"):
             with self.subTest(marker=marker): self.assertIn(marker,self.script)

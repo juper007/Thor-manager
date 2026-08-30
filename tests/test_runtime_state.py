@@ -205,6 +205,14 @@ class AgentStateTests(unittest.TestCase):
         self.assertIs(runtime.get_run('active'),active)
         self.assertIsNotNone(runtime.get_run('newer'))
 
+    def test_forget_runs_removes_only_owned_terminal_runs(self):
+        runtime=make_runtime(['done'])
+        owned=runtime.create_run('owned','alice'); owned.transition(RunState.PLANNING); owned.transition(RunState.VERIFYING); owned.transition(RunState.COMPLETED)
+        other=runtime.create_run('other','bob'); other.transition(RunState.PLANNING); other.transition(RunState.VERIFYING); other.transition(RunState.COMPLETED)
+        active=runtime.create_run('active-owned','alice')
+        self.assertEqual(runtime.forget_runs(('owned','other','active-owned'),'alice'),('owned',))
+        self.assertIsNone(runtime.get_run('owned')); self.assertIs(runtime.get_run('other'),other); self.assertIs(runtime.get_run('active-owned'),active)
+
     def test_cancelled_model_holds_concurrency_until_worker_finishes(self):
         entered=threading.Event(); release=threading.Event(); caught=[]
         runtime=make_runtime([])

@@ -257,6 +257,26 @@ class HandlerIntegrationTests(unittest.TestCase):
         self.assertEqual(json.loads(list_body)['sessions'][0]['mode'],'agent')
         self.assertEqual(json.loads(get_body)['messages'][0]['content'],'hello')
 
+    def test_completed_session_can_be_deleted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store=SessionStore(Path(directory)/'sessions.db'); now=1.0
+            snapshot={'run_id':'delete-run','state':'completed','created_at':now,'updated_at':now,'iterations':1,'tool_calls':0,'error':None,'events':[]}
+            store.create_session(snapshot,[{'role':'user','content':'delete'}],conversation_id='delete-chat'); store.complete_session(snapshot,'done')
+            with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),mock.patch.object(server,'session_store',store),mock.patch.object(server.runtime,'forget_runs') as forget,RunningServer() as app:
+                status,_,payload=app.request('DELETE','/api/chat/sessions/delete-chat',headers={'Authorization':basic()})
+                get_status,_,_=app.request('GET','/api/chat/sessions/delete-chat',headers={'Authorization':basic()})
+        self.assertEqual((status,get_status),(200,404)); self.assertTrue(json.loads(payload)['deleted'])
+        forget.assert_called_once_with(('delete-run',),'thor')
+
+    def test_active_session_cannot_be_deleted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store=SessionStore(Path(directory)/'sessions.db'); now=1.0
+            snapshot={'run_id':'active-run','state':'planning','created_at':now,'updated_at':now,'iterations':1,'tool_calls':0,'error':None,'events':[]}
+            store.create_session(snapshot,[{'role':'user','content':'working'}],conversation_id='active-chat')
+            with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),mock.patch.object(server,'session_store',store),RunningServer() as app:
+                status,_,payload=app.request('DELETE','/api/chat/sessions/active-chat',headers={'Authorization':basic()})
+        self.assertEqual(status,409); self.assertIn('active conversation',json.loads(payload)['error'])
+
     def test_failed_session_can_be_resumed(self):
         with tempfile.TemporaryDirectory() as directory:
             store=SessionStore(Path(directory)/'sessions.db'); now=1.0

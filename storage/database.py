@@ -215,6 +215,20 @@ class SessionStore:
         if owner_id is not None: sql+=' AND owner_id=?'; params.append(owner_id)
         with self.connect() as db: return db.execute(sql+' LIMIT 1',params).fetchone() is not None
 
+    def delete_conversation(self,conversation_id,owner_id):
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            rows=db.execute('SELECT run_id,state FROM sessions WHERE conversation_id=? AND owner_id=?',(conversation_id,owner_id)).fetchall()
+            if not rows: return ()
+            if any(row['state'] not in TERMINAL_STATES for row in rows):
+                raise ValueError('cannot delete an active conversation')
+            run_ids=[row['run_id'] for row in rows]
+            placeholders=','.join('?' for _ in run_ids)
+            db.execute(f"DELETE FROM permission_grants WHERE owner_id=? AND scope='session' AND run_id IN ({placeholders})",[owner_id,*run_ids])
+            db.execute(f'DELETE FROM usage_samples WHERE run_id IN ({placeholders})',run_ids)
+            db.execute('DELETE FROM sessions WHERE conversation_id=? AND owner_id=?',(conversation_id,owner_id))
+        return tuple(run_ids)
+
     def recover_interrupted(self):
         now=time.time(); message='server restarted before the run reached a terminal state'
         with self.connect() as db:
