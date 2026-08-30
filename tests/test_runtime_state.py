@@ -57,6 +57,15 @@ class AgentStateTests(unittest.TestCase):
         self.assertEqual(answer,'final'); self.assertEqual(len(events),1); self.assertEqual(run.tool_calls,1)
         self.assertIn('tool.reused',[event['type'] for event in run.snapshot()['events']])
 
+    def test_diff_tool_completion_exposes_bounded_preview(self):
+        runtime=make_runtime(['tool:x','done'])
+        runtime.parse_calls=lambda text: [{'name':'git_diff','arguments':{}}] if text.startswith('tool:') else []
+        runtime.registry.execute=lambda name,arguments:{'name':name,'arguments':arguments,'status':'success','result':{'path':'app.py','diff':'+api_key=secret\n'+'x'*60_000},'error':None,'error_code':None,'seconds':0}
+        run,_,_,_=runtime.run_chat([{'role':'user','content':'go'}],'diff-preview')
+        payload=[event['payload'] for event in run.snapshot()['events'] if event['type']=='tool.completed'][0]
+        self.assertEqual(payload['path'],'app.py'); self.assertLessEqual(len(payload['diff']),50_000); self.assertTrue(payload['diff_truncated'])
+        self.assertNotIn('secret',payload['diff']); self.assertIn('[REDACTED]',payload['diff'])
+
     def test_multiple_tools_run_sequentially(self):
         runtime=make_runtime(['tool:a','tool:b','done'])
         run,answer,events,_=runtime.run_chat([{'role':'user','content':'go'}],'sequential')

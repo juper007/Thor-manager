@@ -64,6 +64,16 @@ class UIContractTests(unittest.TestCase):
         self.assertIn("event.type==='plan.created'",self.script)
         self.assertIn("event.type==='plan.step'",self.script)
 
+    def test_file_diff_viewer_contract(self):
+        for marker in ('id="diffPanel"','id="diffCount"','id="diffFiles"'):
+            with self.subTest(marker=marker): self.assertIn(marker,self.page)
+        for marker in ('function splitDiffFiles','function renderRunDiffs',"event.type==='tool.completed'",'diff_truncated'):
+            with self.subTest(marker=marker): self.assertIn(marker,self.script)
+        for marker in ('.diff-file code .added','.diff-file code .removed','.diff-file code .hunk'):
+            with self.subTest(marker=marker): self.assertIn(marker,self.agent_css)
+        self.assertIn('/ai-agent.css?v=10',self.page)
+        self.assertIn('/ai-workspace.js?v=11',self.page)
+
     def test_agent_approval_dialog_contract(self):
         for marker in ('id="approvalModal"','id="approvalScope"','id="allowApproval"','id="denyApproval"'):
             with self.subTest(marker=marker): self.assertIn(marker,self.page)

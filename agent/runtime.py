@@ -7,6 +7,7 @@ import uuid
 from collections import OrderedDict
 
 from agent.state import AgentRun,RunState
+from storage.redaction import redact
 
 
 class ServiceBusy(Exception): pass
@@ -17,6 +18,8 @@ class RunTimeout(RunLimitError): pass
 
 RUN_ID_RE=re.compile(r'^[A-Za-z0-9_-]{1,64}$')
 RUN_MODES={'ask','plan','agent'}
+DIFF_TOOLS={'git_diff','file_write','file_patch'}
+MAX_EVENT_DIFF_CHARS=50_000
 
 
 def validate_run_id(value):
@@ -30,6 +33,15 @@ def validate_run_mode(value):
     value='agent' if value is None else value
     if value not in RUN_MODES: raise ValueError('mode must be ask, plan, or agent')
     return value
+
+
+def tool_completion_payload(call,event):
+    payload={'name':call['name'],'status':event.get('status'),'error_code':event.get('error_code'),'seconds':event.get('seconds')}
+    result=event.get('result')
+    if call['name'] in DIFF_TOOLS and isinstance(result,dict) and isinstance(result.get('diff'),str):
+        diff=redact(result['diff'])
+        payload.update({'path':result.get('path'),'diff':diff[:MAX_EVENT_DIFF_CHARS],'diff_truncated':len(diff)>MAX_EVENT_DIFF_CHARS})
+    return payload
 
 
 def validate_messages(value):
@@ -250,7 +262,7 @@ class AgentRuntime:
                     else: event=self.registry.execute(call['name'],call['arguments'])
                     tool_cache[cache_key]=event; events.append(event)
                     if self.session_store is not None: self.session_store.record_tool_execution(run.run_id,len(events),event)
-                    run.emit('tool.completed',{'name':call['name'],'status':event.get('status'),'error_code':event.get('error_code'),'seconds':event.get('seconds')})
+                    run.emit('tool.completed',tool_completion_payload(call,event))
                 results.append(event)
                 result=event.get('result') or {}
                 if call['name']=='web_search': sources.extend(result.get('results',[]))
