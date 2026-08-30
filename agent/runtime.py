@@ -336,6 +336,9 @@ class AgentRuntime:
             evidence=json.dumps(events,ensure_ascii=False)
             verification=self.verification_agent.verify(messages[-1]['content'],final,evidence)
             run.emit('verification.completed',verification)
+            if not verification['passed']:
+                issues='; '.join(str(item) for item in verification.get('issues',[])[:5]) or 'unspecified verification failure'
+                raise RunLimitError('independent verification failed: '+issues)
         if run.transition_if_active(RunState.COMPLETED) is None: raise RunCancelled('run cancelled by user')
         run.emit('plan.step',{'position':3,'status':'completed'})
         run.emit('run.completed',{'answer_characters':len(final),'tools_executed':len(events)})

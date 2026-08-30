@@ -201,7 +201,7 @@ class SessionStore:
         now=time.time()
         with self.connect() as db:
             db.execute('INSERT INTO mcp_servers(name,command_json,cwd,env_json,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET command_json=excluded.command_json,cwd=excluded.cwd,env_json=excluded.env_json,enabled=excluded.enabled,updated_at=excluded.updated_at',
-                (name,redacted_json(command),cwd,redacted_json(env or {}),int(bool(enabled)),now,now))
+                (name,json.dumps(command,ensure_ascii=False,separators=(',',':')),cwd,json.dumps(env or {},ensure_ascii=False,separators=(',',':')),int(bool(enabled)),now,now))
 
     def list_mcp_servers(self,enabled=None):
         sql='SELECT * FROM mcp_servers'; params=[]

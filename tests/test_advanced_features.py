@@ -1,16 +1,18 @@
 import json
 import tempfile
 import unittest
+import sys
 from pathlib import Path
 from unittest import mock
 
 from agent.context import compact_messages
-from agent.mcp import MCPConnectionManager
+from agent.mcp import MCPClient,MCPConnectionManager,MCPError
 from agent.notifications import NotificationService
 from agent.scheduler import RunScheduler
 from agent.verification import VerificationAgent
 from agent.worktrees import WorktreeManager
 from storage.database import SessionStore
+from tools import mcp as mcp_tools
 
 
 class FakeMCPClient:
@@ -18,6 +20,7 @@ class FakeMCPClient:
     def connect(self): return {'protocolVersion':'2025-03-26'}
     def list_tools(self): return [{'name':'echo','inputSchema':{'type':'object'}}]
     def close(self): self.closed=True
+    def is_connected(self): return not self.closed
 
 
 class AdvancedFeatureTests(unittest.TestCase):
@@ -26,9 +29,10 @@ class AdvancedFeatureTests(unittest.TestCase):
         self.store=SessionStore(Path(self.temp.name)/'sessions.db')
 
     def test_context_compaction_preserves_recent_messages(self):
-        messages=[{'role':'user','content':chr(65+i)*2000} for i in range(12)]
+        policy='SYSTEM POLICY '+('never bypass approval '*200)
+        messages=[{'role':'system','content':policy},*({'role':'user','content':chr(65+i)*2000} for i in range(12))]
         compacted,info=compact_messages(messages,14_000,3)
-        self.assertEqual(compacted[-3:],messages[-3:]); self.assertGreater(info['messages_compacted'],0)
+        self.assertEqual(compacted[0],messages[0]); self.assertEqual(compacted[-3:],messages[-3:]); self.assertGreater(info['messages_compacted'],0)
         self.assertLess(info['compacted_characters'],info['original_characters'])
 
     def test_mcp_server_storage_and_connection_lifecycle(self):
@@ -36,6 +40,23 @@ class AdvancedFeatureTests(unittest.TestCase):
         manager.add('demo',['demo-server']); self.assertFalse(manager.status()[0]['connected'])
         client=manager.connect('demo'); self.assertEqual(client.list_tools()[0]['name'],'echo')
         self.assertTrue(manager.status()[0]['connected']); self.assertTrue(manager.disconnect('demo')); self.assertTrue(client.closed)
+
+    def test_mcp_list_does_not_start_disconnected_servers(self):
+        manager=mock.Mock(); manager.status.return_value=[{'name':'demo','connected':False,'enabled':True}]
+        mcp_tools.configure(manager)
+        self.assertEqual(mcp_tools.mcp_list({})['servers'][0]['tools'],[])
+        manager.connect.assert_not_called()
+
+    def test_mcp_timeout_closes_process(self):
+        client=MCPClient([sys.executable,'-c','import time; time.sleep(2)'],timeout=.05)
+        with self.assertRaises(MCPError): client.connect()
+        self.assertFalse(client.is_connected())
+
+    def test_mcp_secrets_require_host_environment_reference(self):
+        manager=MCPConnectionManager(self.store,FakeMCPClient)
+        with self.assertRaises(ValueError): manager.add('bad',['server'],env={'API_TOKEN':'literal-secret'})
+        manager.add('good',['server'],env={'API_TOKEN':{'from_env':'MCP_API_TOKEN'},'LOG_LEVEL':'info'})
+        self.assertEqual(manager.servers()[0]['env']['API_TOKEN'],{'from_env':'MCP_API_TOKEN'})
 
     def test_project_memory_is_scoped_and_redacted(self):
         self.store.remember('project-a','preference','token=secret-value')

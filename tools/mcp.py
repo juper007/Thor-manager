@@ -11,7 +11,7 @@ def mcp_list(arguments):
     servers=[]
     for server in _manager.status():
         item={'name':server['name'],'connected':server['connected'],'enabled':server['enabled'],'tools':[]}
-        if server['enabled']:
+        if server['connected']:
             try: item['tools']=_manager.connect(server['name']).list_tools()
             except Exception as exc: item['error']=str(exc)
         servers.append(item)

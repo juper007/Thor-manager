@@ -114,7 +114,7 @@ GET/POST/DELETE /api/advanced/worktrees[/{name}]
 GET              /api/advanced/usage?since={unix-seconds}
 ```
 
-MCP tools are exposed to the model as `mcp_list` and `mcp_call`; calls to external MCP tools are classified as elevated and pass through the existing approval engine. Schedules and the verification pass are disabled by default. Enable them explicitly with `THOR_SCHEDULER_ENABLED=1` and `THOR_VERIFY_AGENT=1`. Notification targets must use public HTTPS addresses and are resolved to pinned public IPs to prevent DNS-rebinding SSRF.
+MCP tools are exposed to the model as `mcp_list` and `mcp_call`; calls to external MCP tools are classified as elevated and pass through the existing approval engine. `mcp_list` never starts a disconnected server. Sensitive MCP environment values must be configured as host environment references such as `{"API_TOKEN":{"from_env":"MCP_DEMO_API_TOKEN"}}`; literal secret values are rejected and never stored in SQLite. Schedules and the verification pass are disabled by default. Enable them explicitly with `THOR_SCHEDULER_ENABLED=1` and `THOR_VERIFY_AGENT=1`. A failed independent verification marks the run failed. Notification targets must use public HTTPS addresses and are resolved to pinned public IPs to prevent DNS-rebinding SSRF.
 
 ## Architecture
 

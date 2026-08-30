@@ -1,6 +1,7 @@
 import threading
 import time
 import unittest
+from unittest import mock
 
 from agent.runtime import AgentRuntime,RunCancelled,RunLimitError,RunTimeout,ServiceBusy,tool_completion_payload,validate_run_id,validate_run_mode
 from agent.state import AgentRun,RunState
@@ -35,6 +36,14 @@ class AgentStateTests(unittest.TestCase):
         self.assertEqual((answer,events),('answer',[])); self.assertEqual(run.state,RunState.COMPLETED)
         types=[event['type'] for event in run.snapshot()['events']]
         self.assertIn('model.started',types); self.assertIn('run.completed',types)
+
+    def test_failed_independent_verification_fails_run(self):
+        runtime=make_runtime(['unsupported answer'])
+        runtime.verification_agent=mock_verifier=mock.Mock()
+        mock_verifier.verify.return_value={'passed':False,'issues':['missing evidence'],'summary':'bad'}
+        with self.assertRaisesRegex(RunLimitError,'missing evidence'):
+            runtime.run_chat([{'role':'user','content':'prove it'}],'verification-failed')
+        self.assertEqual(runtime.get_run('verification-failed').state,RunState.FAILED)
 
     def test_run_modes_emit_plan_progress_and_block_tools_outside_agent(self):
         for index,mode in enumerate(('ask','plan')):

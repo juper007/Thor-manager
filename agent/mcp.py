@@ -4,6 +4,7 @@ import os
 import subprocess
 import threading
 import queue
+import re
 
 
 class MCPError(RuntimeError): pass
@@ -18,8 +19,14 @@ class MCPClient:
 
     def connect(self):
         if self.process and self.process.poll() is None: return self
-        environment=os.environ.copy(); environment.update({str(k):str(v) for k,v in self.env.items()})
-        self.process=subprocess.Popen(self.command,cwd=self.cwd,env=environment,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf-8',bufsize=1)
+        environment=os.environ.copy()
+        for key,value in self.env.items():
+            if isinstance(value,dict) and set(value)=={'from_env'}:
+                source=value['from_env']
+                if source not in os.environ: raise MCPError(f'MCP environment source is not set: {source}')
+                environment[str(key)]=os.environ[source]
+            else: environment[str(key)]=str(value)
+        self.process=subprocess.Popen(self.command,cwd=self.cwd,env=environment,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,encoding='utf-8',bufsize=1)
         result=self.request('initialize',{'protocolVersion':'2025-03-26','capabilities':{},'clientInfo':{'name':'thor-monitor','version':'1'}})
         self.notify('notifications/initialized',{})
         return result
@@ -32,7 +39,9 @@ class MCPClient:
         output=queue.Queue(maxsize=1)
         threading.Thread(target=lambda:output.put(self.process.stdout.readline()),daemon=True).start()
         try: return output.get(timeout=self.timeout)
-        except queue.Empty as exc: raise MCPError(f'MCP request timed out after {self.timeout} seconds') from exc
+        except queue.Empty as exc:
+            self.close()
+            raise MCPError(f'MCP request timed out after {self.timeout} seconds; connection closed') from exc
 
     def request(self,method,params=None):
         with self._lock:
@@ -56,15 +65,34 @@ class MCPClient:
             process.terminate()
             try: process.wait(timeout=2)
             except subprocess.TimeoutExpired: process.kill(); process.wait(timeout=2)
+        if process:
+            for stream in (process.stdin,process.stdout):
+                if stream:
+                    try: stream.close()
+                    except OSError: pass
+
+    def is_connected(self): return self.process is not None and self.process.poll() is None
 
 
 class MCPConnectionManager:
     def __init__(self,store,client_factory=MCPClient): self.store=store; self.client_factory=client_factory; self._clients={}; self._lock=threading.Lock()
     def servers(self): return self.store.list_mcp_servers()
-    def add(self,name,command,cwd=None,env=None,enabled=True): self.store.upsert_mcp_server(name,command,cwd,env,enabled)
+    def add(self,name,command,cwd=None,env=None,enabled=True):
+        normalized={}
+        for key,value in (env or {}).items():
+            if not isinstance(key,str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*',key): raise ValueError('invalid MCP environment name')
+            if isinstance(value,dict):
+                if set(value)!={'from_env'} or not isinstance(value['from_env'],str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*',value['from_env']): raise ValueError('invalid MCP environment reference')
+            elif not isinstance(value,str): raise ValueError('MCP environment values must be strings or from_env references')
+            if re.search(r'(?:password|secret|token|api[_-]?key|authorization|cookie)',key,re.I) and not isinstance(value,dict):
+                raise ValueError(f'sensitive MCP environment value {key} must use from_env')
+            normalized[key]=value
+        self.store.upsert_mcp_server(name,command,cwd,normalized,enabled)
     def connect(self,name):
         with self._lock:
-            if name in self._clients: return self._clients[name]
+            existing=self._clients.get(name)
+            if existing is not None and getattr(existing,'is_connected',lambda:True)(): return existing
+            if existing is not None: self._clients.pop(name,None)
             server=next((x for x in self.store.list_mcp_servers(True) if x['name']==name),None)
             if not server: raise KeyError(name)
             client=self.client_factory(server['command'],server['cwd'],server['env']); client.connect(); self._clients[name]=client; return client
@@ -73,7 +101,7 @@ class MCPConnectionManager:
         if client: client.close()
         return client is not None
     def status(self):
-        configured=self.servers(); connected=set(self._clients)
+        configured=self.servers(); connected={name for name,client in self._clients.items() if getattr(client,'is_connected',lambda:True)()}
         return [{**item,'connected':item['name'] in connected} for item in configured]
     def close(self):
         for name in list(self._clients): self.disconnect(name)
