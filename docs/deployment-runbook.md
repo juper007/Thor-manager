@@ -122,7 +122,7 @@ THOR_SESSION_DB="$deploy_test_dir/sessions.db" PYTHONDONTWRITEBYTECODE=1 python3
 rm -rf -- "$deploy_test_dir"
 ```
 
-현재 기준은 전체 테스트 156개 통과다. 한 개라도 실패하면 서비스를 재시작하지 않는다.
+현재 기준은 전체 테스트 157개 통과다. 한 개라도 실패하면 서비스를 재시작하지 않는다.
 
 ## 5. 서비스 재시작
 
