@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from agent.runtime import AgentRuntime
 from agent.skills import SkillCatalog,SkillPrompt,parse_skill
@@ -82,6 +83,26 @@ class SkillCatalogTests(unittest.TestCase):
         _,_,events,_=runtime.run_chat([{'role':'user','content':'review this'}],'skill-policy')
         self.assertFalse(calls)
         self.assertEqual(events[0]['error_code'],'skill_tool_not_allowed')
+
+    def test_blocked_ask_tool_does_not_trigger_independent_verification(self):
+        calls=[]; registry=ToolRegistry()
+        registry.register(ToolSpec('calculator','test',{'type':'object','properties':{},'additionalProperties':False},lambda _:calls.append(True)))
+        replies=iter(['<tool_call>{"name":"calculator","arguments":{}}</tool_call>','blocked safely'])
+        loader=lambda root,messages:SkillPrompt('review policy',{'file_read'})
+        runtime=AgentRuntime(ROOT,lambda _:next(replies),registry,parse_tool_calls,loader,lambda text:text)
+        runtime.verification_agent=verifier=mock.Mock()
+        _,_,events,_=runtime.run_chat([{'role':'user','content':'review this'}],'ask-blocked-skill',mode='ask')
+        self.assertFalse(calls); self.assertEqual(events[0]['error_code'],'skill_tool_not_allowed')
+        verifier.verify.assert_not_called()
+
+    def test_ask_mode_executes_tool_allowed_by_active_skill(self):
+        calls=[]; registry=ToolRegistry()
+        registry.register(ToolSpec('calculator','test',{'type':'object','properties':{},'additionalProperties':False},lambda _:calls.append(True) or {'value':4}))
+        replies=iter(['<tool_call>{"name":"calculator","arguments":{}}</tool_call>','4'])
+        loader=lambda root,messages:SkillPrompt('calculator policy',{'calculator'})
+        runtime=AgentRuntime(ROOT,lambda _:next(replies),registry,parse_tool_calls,loader,lambda text:text)
+        _,answer,events,_=runtime.run_chat([{'role':'user','content':'2+2 계산'}],'ask-skill-policy',mode='ask')
+        self.assertEqual(answer,'4'); self.assertEqual(calls,[True]); self.assertEqual(events[0]['status'],'success')
 
     def test_unmatched_request_runtime_blocks_non_read_tool(self):
         prompt=load_skill_instructions(ROOT,[{'role':'user','content':'도와줘'}])

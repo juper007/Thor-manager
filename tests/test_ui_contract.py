@@ -73,6 +73,7 @@ class UIContractTests(unittest.TestCase):
         self.assertIn("fetch(API+'/api/chat/runs/'",self.script)
         self.assertIn("event.type==='plan.created'",self.script)
         self.assertIn("event.type==='plan.step'",self.script)
+        self.assertIn('질문하거나 필요한 skill 도구 사용을 요청하세요',self.script)
 
     def test_file_diff_viewer_contract(self):
         for marker in ('id="diffPanel"','id="diffCount"','id="diffFiles"'):
@@ -90,7 +91,7 @@ class UIContractTests(unittest.TestCase):
         for marker in ('.test-result.passed','.test-result.failed','.test-result.truncated','.test-output.stderr'):
             with self.subTest(marker=marker): self.assertIn(marker,self.agent_css)
         self.assertIn('/ai-agent.css?v=13',self.page)
-        self.assertIn('/ai-workspace.js?v=12',self.page)
+        self.assertIn('/ai-workspace.js?v=13',self.page)
         self.assertIn('/auth-ui.js?v=1',self.page)
         self.assertIn('id="authUser"',self.page); self.assertIn('id="logout"',self.page)
 

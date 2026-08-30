@@ -282,7 +282,7 @@ sudo systemctl restart thor-monitor.service
 
 | 모드 | 동작 |
 |---|---|
-| Ask | 답변만 제공 |
+| Ask | 직접 답변하며 활성 skill에 허용된 도구 사용 가능 |
 | Plan | 분석과 계획까지만 작성 |
 | Agent | 승인 정책 안에서 실제 작업 수행 |
 | Autonomous | 사전 승인된 안전 범위에서 완료까지 수행 |

@@ -260,7 +260,7 @@ class AgentRuntime:
 
     def _run(self,run,messages,started,release_capacity=lambda:None,reacquire_capacity=lambda:None,on_delta=None,mode='agent'):
         mode_instruction={
-            'ask':'Answer the user directly without calling or suggesting any tool calls.',
+            'ask':'Answer the user directly. You may call tools allowed by the active skill when they are needed for an accurate answer.',
             'plan':'Return a concise numbered execution plan only. Do not call tools or perform the work.',
             'agent':'Use the available tools when they are needed to complete the request.',
         }[mode]
@@ -287,7 +287,7 @@ class AgentRuntime:
             answer=self._call_model(run,conversation,started,on_delta=on_delta)
             calls=self.parse_calls(answer)
             if not calls: break
-            if mode!='agent':
+            if mode=='plan':
                 conversation.append({'role':'assistant','content':answer})
                 conversation.append({'role':'user','content':'Tool calls are disabled in '+mode+' mode. Respond without tools and follow the requested mode.'})
                 answer=self._require_final_answer(self._call_model(run,conversation,started,mode+'_recovery',on_delta),mode+' recovery')
@@ -336,7 +336,8 @@ class AgentRuntime:
             url=source.get('url','')
             if url and url not in seen: seen.add(url); unique.append(source)
         clean=self.strip_tool_calls(answer); final=clean or '도구 실행 결과를 바탕으로 답변을 만들지 못했습니다.'
-        if self.verification_agent is not None and mode=='agent':
+        ask_used_tool=mode=='ask' and any(event.get('status')=='success' for event in events)
+        if self.verification_agent is not None and (mode=='agent' or ask_used_tool):
             evidence=json.dumps(events,ensure_ascii=False)
             verification=self.verification_agent.verify(messages[-1]['content'],final,evidence)
             run.emit('verification.completed',verification)

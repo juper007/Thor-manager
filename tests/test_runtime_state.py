@@ -45,16 +45,35 @@ class AgentStateTests(unittest.TestCase):
             runtime.run_chat([{'role':'user','content':'prove it'}],'verification-failed')
         self.assertEqual(runtime.get_run('verification-failed').state,RunState.FAILED)
 
-    def test_run_modes_emit_plan_progress_and_block_tools_outside_agent(self):
-        for index,mode in enumerate(('ask','plan')):
-            with self.subTest(mode=mode):
-                runtime=make_runtime(['tool:x','direct response'])
-                run,answer,events,_=runtime.run_chat([{'role':'user','content':'hello'}],f'mode-{index}',mode=mode)
-                self.assertEqual(answer,'direct response'); self.assertEqual(events,[]); self.assertEqual(runtime.registry.calls,[])
-                snapshot=run.snapshot(); types=[event['type'] for event in snapshot['events']]
-                self.assertIn('run.mode',types); self.assertIn('plan.created',types)
-                plan=[event for event in snapshot['events'] if event['type']=='plan.step']
-                self.assertEqual([(event['payload']['position'],event['payload']['status']) for event in plan][-2:],[(3,'in_progress'),(3,'completed')])
+    def test_ask_mode_can_execute_active_skill_tools(self):
+        runtime=make_runtime(['tool:x','direct response'])
+        run,answer,events,_=runtime.run_chat([{'role':'user','content':'hello'}],'mode-ask',mode='ask')
+        self.assertEqual(answer,'direct response'); self.assertEqual(len(events),1)
+        self.assertEqual(runtime.registry.calls,[('fake',{'value':'x'})])
+        self.assertIn('run.mode',[event['type'] for event in run.snapshot()['events']])
+
+    def test_ask_mode_with_tool_execution_uses_independent_verification(self):
+        runtime=make_runtime(['tool:x','unsupported answer'])
+        runtime.verification_agent=mock_verifier=mock.Mock()
+        mock_verifier.verify.return_value={'passed':False,'issues':['tool result unsupported'],'summary':'bad'}
+        with self.assertRaisesRegex(RunLimitError,'tool result unsupported'):
+            runtime.run_chat([{'role':'user','content':'hello'}],'ask-verification',mode='ask')
+        mock_verifier.verify.assert_called_once()
+
+    def test_ask_mode_without_tools_skips_independent_verification(self):
+        runtime=make_runtime(['direct response'])
+        runtime.verification_agent=mock_verifier=mock.Mock()
+        runtime.run_chat([{'role':'user','content':'hello'}],'ask-no-verification',mode='ask')
+        mock_verifier.verify.assert_not_called()
+
+    def test_plan_mode_emits_progress_and_blocks_tools(self):
+        runtime=make_runtime(['tool:x','direct response'])
+        run,answer,events,_=runtime.run_chat([{'role':'user','content':'hello'}],'mode-plan',mode='plan')
+        self.assertEqual(answer,'direct response'); self.assertEqual(events,[]); self.assertEqual(runtime.registry.calls,[])
+        snapshot=run.snapshot(); types=[event['type'] for event in snapshot['events']]
+        self.assertIn('run.mode',types); self.assertIn('plan.created',types)
+        plan=[event for event in snapshot['events'] if event['type']=='plan.step']
+        self.assertEqual([(event['payload']['position'],event['payload']['status']) for event in plan][-2:],[(3,'in_progress'),(3,'completed')])
 
     def test_invalid_run_mode_is_rejected(self):
         with self.assertRaises(ValueError): validate_run_mode('unsafe')
