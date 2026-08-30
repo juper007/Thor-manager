@@ -62,6 +62,8 @@ runtime=AgentRuntime(
     agent_tools.load_skill_instructions,
     lambda text: agent_tools.TOOL_CALL_RE.sub('',text).strip(),
     AI_CONCURRENCY,
+    max_iterations=positive_int_env('THOR_AGENT_MAX_ITERATIONS',8),
+    max_tool_calls=positive_int_env('THOR_AGENT_MAX_TOOL_CALLS',8),
     session_store=session_store,
     permission_engine=permission_engine,
     stream_model_call=lambda messages,callback: edge_chat(messages,on_delta=callback),

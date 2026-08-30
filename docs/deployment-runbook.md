@@ -62,6 +62,8 @@ archive 내용을 배포 디렉터리에 푼다.
 ssh jetsonthor "tar -xf /tmp/thor-monitor-deploy.tar -C /home/juper007/thor-monitor"
 ```
 
+Workspace Git 도구가 작동하려면 배포 디렉터리에 로컬 Git 기준선이 있어야 한다. 최초 한 번 `git init` 후 비밀·운영 데이터가 `.gitignore`로 제외되는지 확인하고 기준선 커밋을 만든다. 이후 archive 배포가 끝날 때마다 배포된 추적 파일만 새 로컬 기준선으로 커밋한다. 운영 `thor-monitor.env`, `data/`, 생성 이미지, DB는 절대 stage하지 않는다.
+
 배포 후 다음 파일이 프로젝트 루트에 생겼다면 잘못 배포한 것이다.
 
 ```text
@@ -120,7 +122,7 @@ THOR_SESSION_DB="$deploy_test_dir/sessions.db" PYTHONDONTWRITEBYTECODE=1 python3
 rm -rf -- "$deploy_test_dir"
 ```
 
-현재 기준은 전체 테스트 155개 통과다. 한 개라도 실패하면 서비스를 재시작하지 않는다.
+현재 기준은 전체 테스트 156개 통과다. 한 개라도 실패하면 서비스를 재시작하지 않는다.
 
 ## 5. 서비스 재시작
 

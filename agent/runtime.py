@@ -76,7 +76,7 @@ def validate_messages(value):
 
 class AgentRuntime:
     def __init__(self,root,model_call,registry,parse_calls,skill_loader,strip_tool_calls,concurrency=1,
-                 max_iterations=5,max_tool_calls=8,total_timeout=900,recent_run_limit=100,session_store=None,permission_engine=None,stream_model_call=None,
+                 max_iterations=8,max_tool_calls=8,total_timeout=900,recent_run_limit=100,session_store=None,permission_engine=None,stream_model_call=None,
                  context_limit=120_000,verification_agent=None):
         self.root=root; self.model_call=model_call; self.registry=registry; self.parse_calls=parse_calls
         self.skill_loader=skill_loader; self.strip_tool_calls=strip_tool_calls

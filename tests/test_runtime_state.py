@@ -93,6 +93,12 @@ class AgentStateTests(unittest.TestCase):
         self.assertEqual(answer,'done'); self.assertEqual(run.tool_calls,2)
         self.assertEqual([event['arguments']['value'] for event in events],['a','b'])
 
+    def test_default_iteration_budget_allows_fix_test_retry_and_diff(self):
+        replies=['tool:open','tool:read','tool:patch','tool:test-failed','tool:repatch','tool:test-passed','tool:diff','tool:status','done']
+        runtime=make_runtime(replies)
+        run,answer,events,_=runtime.run_chat([{'role':'user','content':'fix and verify'}],'coding-budget')
+        self.assertEqual(answer,'done'); self.assertEqual(run.iterations,8); self.assertEqual(run.tool_calls,8); self.assertEqual(len(events),8)
+
     def test_cancel_during_tool_prevents_the_next_tool(self):
         entered=threading.Event(); release=threading.Event(); caught=[]
         runtime=make_runtime(['ignored'])
