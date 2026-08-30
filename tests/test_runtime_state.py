@@ -2,7 +2,7 @@ import threading
 import time
 import unittest
 
-from agent.runtime import AgentRuntime,RunCancelled,RunLimitError,RunTimeout,ServiceBusy,validate_run_id,validate_run_mode
+from agent.runtime import AgentRuntime,RunCancelled,RunLimitError,RunTimeout,ServiceBusy,tool_completion_payload,validate_run_id,validate_run_mode
 from agent.state import AgentRun,RunState
 
 
@@ -65,6 +65,18 @@ class AgentStateTests(unittest.TestCase):
         payload=[event['payload'] for event in run.snapshot()['events'] if event['type']=='tool.completed'][0]
         self.assertEqual(payload['path'],'app.py'); self.assertLessEqual(len(payload['diff']),50_000); self.assertTrue(payload['diff_truncated'])
         self.assertNotIn('secret',payload['diff']); self.assertIn('[REDACTED]',payload['diff'])
+
+    def test_test_run_completion_exposes_redacted_result(self):
+        runtime=make_runtime(['tool:x','done'])
+        runtime.parse_calls=lambda text: [{'name':'test_run','arguments':{'command':'token=command-secret pytest'}}] if text.startswith('tool:') else []
+        runtime.registry.execute=lambda name,arguments:{'name':name,'arguments':arguments,'status':'success','result':{'return_code':1,'stdout':'1 failed\n','stderr':'api_key=result-secret'},'error':None,'error_code':None,'seconds':1.25,'truncated':False}
+        run,_,_,_=runtime.run_chat([{'role':'user','content':'go'}],'test-result')
+        payload=[event['payload'] for event in run.snapshot()['events'] if event['type']=='tool.completed'][0]
+        result=payload['test_result']; self.assertEqual((result['return_code'],payload['seconds']),(1,1.25))
+        self.assertNotIn('command-secret',result['command']); self.assertNotIn('result-secret',result['stderr'])
+        truncated_event={'status':'success','result':{'preview':'token=preview-secret','truncated':True},'error_code':None,'seconds':2,'truncated':True}
+        truncated=tool_completion_payload({'name':'test_run','arguments':{'command':'pytest'}},truncated_event)['test_result']
+        self.assertIsNone(truncated['return_code']); self.assertTrue(truncated['truncated']); self.assertIn('[REDACTED]',truncated['stdout'])
 
     def test_multiple_tools_run_sequentially(self):
         runtime=make_runtime(['tool:a','tool:b','done'])

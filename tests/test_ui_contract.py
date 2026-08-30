@@ -71,8 +71,16 @@ class UIContractTests(unittest.TestCase):
             with self.subTest(marker=marker): self.assertIn(marker,self.script)
         for marker in ('.diff-file code .added','.diff-file code .removed','.diff-file code .hunk'):
             with self.subTest(marker=marker): self.assertIn(marker,self.agent_css)
-        self.assertIn('/ai-agent.css?v=10',self.page)
-        self.assertIn('/ai-workspace.js?v=11',self.page)
+
+    def test_test_result_panel_contract(self):
+        for marker in ('id="testPanel"','id="testCount"','id="testResults"'):
+            with self.subTest(marker=marker): self.assertIn(marker,self.page)
+        for marker in ('function collectTestRuns','function renderTestResults','return_code===0',"['STDOUT',run.stdout]", "['STDERR',run.stderr]"):
+            with self.subTest(marker=marker): self.assertIn(marker,self.script)
+        for marker in ('.test-result.passed','.test-result.failed','.test-result.truncated','.test-output.stderr'):
+            with self.subTest(marker=marker): self.assertIn(marker,self.agent_css)
+        self.assertIn('/ai-agent.css?v=11',self.page)
+        self.assertIn('/ai-workspace.js?v=12',self.page)
 
     def test_agent_approval_dialog_contract(self):
         for marker in ('id="approvalModal"','id="approvalScope"','id="allowApproval"','id="denyApproval"'):

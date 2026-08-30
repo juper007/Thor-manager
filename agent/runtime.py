@@ -20,6 +20,8 @@ RUN_ID_RE=re.compile(r'^[A-Za-z0-9_-]{1,64}$')
 RUN_MODES={'ask','plan','agent'}
 DIFF_TOOLS={'git_diff','file_write','file_patch'}
 MAX_EVENT_DIFF_CHARS=50_000
+MAX_EVENT_STDOUT_CHARS=20_000
+MAX_EVENT_STDERR_CHARS=10_000
 
 
 def validate_run_id(value):
@@ -41,6 +43,17 @@ def tool_completion_payload(call,event):
     if call['name'] in DIFF_TOOLS and isinstance(result,dict) and isinstance(result.get('diff'),str):
         diff=redact(result['diff'])
         payload.update({'path':result.get('path'),'diff':diff[:MAX_EVENT_DIFF_CHARS],'diff_truncated':len(diff)>MAX_EVENT_DIFF_CHARS})
+    if call['name']=='test_run' and isinstance(result,dict):
+        preview=result.get('preview','') if result.get('truncated') and isinstance(result.get('preview'),str) else ''
+        stdout=redact(result.get('stdout',preview)) if isinstance(result.get('stdout',preview),str) else ''
+        stderr=redact(result.get('stderr','')) if isinstance(result.get('stderr',''),str) else ''
+        payload['test_result']={
+            'command':redact(call['arguments'].get('command','')),
+            'return_code':result.get('return_code'),
+            'stdout':stdout[:MAX_EVENT_STDOUT_CHARS],
+            'stderr':stderr[:MAX_EVENT_STDERR_CHARS],
+            'truncated':bool(event.get('truncated') or result.get('truncated') or len(stdout)>MAX_EVENT_STDOUT_CHARS or len(stderr)>MAX_EVENT_STDERR_CHARS),
+        }
     return payload
 
 
