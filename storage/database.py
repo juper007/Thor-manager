@@ -55,12 +55,18 @@ class SessionStore:
                         db.executescript(f'BEGIN IMMEDIATE;\n{down}\nDELETE FROM schema_migrations WHERE version={version};\nCOMMIT;')
         return target
 
-    def create_session(self,snapshot,messages,resumed_from=None):
+    def create_session(self,snapshot,messages,resumed_from=None,conversation_id=None):
         now=time.time()
         with self.connect() as db:
-            db.execute('INSERT INTO sessions(run_id,state,created_at,updated_at,iterations,tool_calls,error,resumed_from,owner_id) VALUES (?,?,?,?,?,?,?,?,?)',
-                (snapshot['run_id'],snapshot['state'],snapshot['created_at'],snapshot['updated_at'],snapshot['iterations'],snapshot['tool_calls'],snapshot.get('error'),resumed_from,snapshot.get('owner_id','thor')))
-            for sequence,message in enumerate(messages,1):
+            conversation_id=conversation_id or snapshot['run_id']
+            owner_id=snapshot.get('owner_id','thor')
+            existing=[dict(row) for row in db.execute('SELECT m.role,m.content FROM messages m JOIN sessions s ON s.run_id=m.run_id WHERE s.conversation_id=? AND s.owner_id=? ORDER BY s.created_at,m.sequence',(conversation_id,owner_id))]
+            incoming=[{'role':item['role'],'content':redact(item['content'])} for item in messages]
+            if existing and incoming[:len(existing)]!=existing: raise ValueError('conversation history does not match stored messages')
+            db.execute('INSERT INTO sessions(run_id,state,created_at,updated_at,iterations,tool_calls,error,resumed_from,owner_id,conversation_id) VALUES (?,?,?,?,?,?,?,?,?,?)',
+                (snapshot['run_id'],snapshot['state'],snapshot['created_at'],snapshot['updated_at'],snapshot['iterations'],snapshot['tool_calls'],snapshot.get('error'),resumed_from,owner_id,conversation_id))
+            stored_messages=messages[len(existing):]
+            for sequence,message in enumerate(stored_messages,1):
                 db.execute('INSERT INTO messages(run_id,sequence,role,content,created_at) VALUES (?,?,?,?,?)',
                     (snapshot['run_id'],sequence,message['role'],redact(message['content']),now))
         self.save_snapshot(snapshot)
@@ -178,6 +184,37 @@ class SessionStore:
                 COALESCE((SELECT json_extract(e.payload_json,'$.mode') FROM run_events e WHERE e.run_id=s.run_id AND e.type='run.mode' ORDER BY e.sequence LIMIT 1),'agent') AS mode
                 FROM sessions s"""+where+' ORDER BY s.updated_at DESC LIMIT ? OFFSET ?',params)]
 
+    def list_conversations(self,limit=50,offset=0,owner_id=None):
+        limit=max(1,min(int(limit),100)); offset=max(0,int(offset)); clauses=[]; params=[]
+        if owner_id is not None: clauses.append('s.owner_id=?'); params.append(owner_id)
+        where=(' WHERE '+' AND '.join(clauses)) if clauses else ''
+        sql="""SELECT s.conversation_id AS run_id,s.state,grouped.created_at,s.updated_at,
+            grouped.iterations,grouped.tool_calls,s.error,s.final_answer,s.resumed_from,
+            COALESCE((SELECT json_extract(e.payload_json,'$.mode') FROM run_events e WHERE e.run_id=s.run_id AND e.type='run.mode' ORDER BY e.sequence LIMIT 1),'agent') AS mode
+            FROM sessions s JOIN (SELECT owner_id,conversation_id,MIN(created_at) created_at,SUM(iterations) iterations,SUM(tool_calls) tool_calls FROM sessions GROUP BY owner_id,conversation_id) grouped
+            ON grouped.owner_id=s.owner_id AND grouped.conversation_id=s.conversation_id
+            AND s.run_id=(SELECT latest.run_id FROM sessions latest WHERE latest.owner_id=s.owner_id AND latest.conversation_id=s.conversation_id ORDER BY latest.updated_at DESC,latest.created_at DESC LIMIT 1)"""+where+' ORDER BY s.updated_at DESC LIMIT ? OFFSET ?'
+        params.extend((limit,offset))
+        with self.connect() as db: return [dict(row) for row in db.execute(sql,params)]
+
+    def get_conversation(self,conversation_id,owner_id=None):
+        sql='SELECT run_id FROM sessions WHERE conversation_id=?'; params=[conversation_id]
+        if owner_id is not None: sql+=' AND owner_id=?'; params.append(owner_id)
+        sql+=' ORDER BY updated_at DESC LIMIT 1'
+        with self.connect() as db: row=db.execute(sql,params).fetchone()
+        if row is None: return None
+        result=self.get_session(row['run_id'],owner_id)
+        result['latest_run_id']=result['run_id']
+        with self.connect() as db:
+            result['messages']=[dict(item) for item in db.execute('SELECT m.role,m.content,m.created_at FROM messages m JOIN sessions s ON s.run_id=m.run_id WHERE s.conversation_id=? AND s.owner_id=? ORDER BY s.created_at,m.sequence',(conversation_id,result['owner_id']))]
+        result['run_id']=conversation_id
+        return result
+
+    def conversation_exists(self,conversation_id,owner_id=None):
+        sql='SELECT 1 FROM sessions WHERE conversation_id=?'; params=[conversation_id]
+        if owner_id is not None: sql+=' AND owner_id=?'; params.append(owner_id)
+        with self.connect() as db: return db.execute(sql+' LIMIT 1',params).fetchone() is not None
+
     def recover_interrupted(self):
         now=time.time(); message='server restarted before the run reached a terminal state'
         with self.connect() as db:
@@ -197,13 +234,13 @@ class SessionStore:
     def cleanup(self,max_age_days=30,keep_recent=100):
         cutoff=time.time()-max(1,int(max_age_days))*86400
         with self.connect() as db:
-            protected=[row[0] for row in db.execute('SELECT run_id FROM sessions ORDER BY updated_at DESC LIMIT ?',(max(0,int(keep_recent)),))]
-            placeholders=','.join('?' for _ in protected)
-            sql="DELETE FROM sessions WHERE state IN ('completed','failed','cancelled') AND updated_at<?"
-            params=[cutoff]
-            if protected: sql+=f' AND run_id NOT IN ({placeholders})'; params.extend(protected)
-            cursor=db.execute(sql,params)
-            return cursor.rowcount
+            protected={(row['owner_id'],row['conversation_id']) for row in db.execute('SELECT owner_id,conversation_id FROM sessions GROUP BY owner_id,conversation_id ORDER BY MAX(updated_at) DESC LIMIT ?',(max(0,int(keep_recent)),))}
+            candidates=[(row['owner_id'],row['conversation_id']) for row in db.execute("SELECT owner_id,conversation_id FROM sessions GROUP BY owner_id,conversation_id HAVING MAX(updated_at)<? AND SUM(CASE WHEN state NOT IN ('completed','failed','cancelled') THEN 1 ELSE 0 END)=0",(cutoff,))]
+            deleted=0
+            for owner_id,conversation_id in candidates:
+                if (owner_id,conversation_id) in protected: continue
+                deleted+=db.execute('DELETE FROM sessions WHERE owner_id=? AND conversation_id=?',(owner_id,conversation_id)).rowcount
+            return deleted
 
     def list_users(self):
         with self.connect() as db:

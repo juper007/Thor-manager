@@ -138,10 +138,10 @@ class HandlerIntegrationTests(unittest.TestCase):
 
     def test_chat_contract(self):
         response=('테스트 답변',[{'name':'calculator','arguments':{'expression':'2+2'},'seconds':0.01,'error':None}],[])
-        body=json.dumps({'messages':[{'role':'user','content':'2+2'}]}).encode()
+        body=json.dumps({'run_id':'request-run','session_id':'conversation-test','messages':[{'role':'user','content':'2+2'}]}).encode()
         headers={'Authorization':basic(),'Content-Type':'application/json','Content-Length':str(len(body))}
         run=mock.Mock(run_id='test-run',state=mock.Mock(value='completed'))
-        with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),mock.patch.object(server,'agent_run_chat',return_value=(run,*response)),RunningServer() as app:
+        with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),mock.patch.object(server,'agent_run_chat',return_value=(run,*response)) as call,RunningServer() as app:
             status,result_headers,payload=app.request('POST','/api/chat',body,headers)
         result=json.loads(payload)
         self.assertEqual(status,200)
@@ -151,12 +151,13 @@ class HandlerIntegrationTests(unittest.TestCase):
         self.assertEqual(result['run_state'],'completed')
         self.assertEqual(result['tools_used'][0]['name'],'calculator')
         self.assertIn('application/x-ndjson',result_headers['Content-Type'])
+        call.assert_called_once_with([{'role':'user','content':'2+2'}],'request-run','agent','thor','conversation-test')
 
     def test_streaming_chat_emits_delta_and_final_events(self):
         body=json.dumps({'run_id':'stream-api','stream':True,'messages':[{'role':'user','content':'hello'}]}).encode()
         headers={'Authorization':basic(),'Content-Type':'application/json','Content-Length':str(len(body))}
         run=mock.Mock(run_id='stream-api',state=mock.Mock(value='completed'))
-        def execute(messages,run_id,on_delta=None,mode='agent',owner_id='thor'):
+        def execute(messages,run_id,on_delta=None,mode='agent',owner_id='thor',conversation_id=None):
             on_delta('첫'); on_delta('째'); return run,'첫째',[],[]
         with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),mock.patch.object(server.runtime,'run_chat',side_effect=execute),RunningServer() as app:
             status,result_headers,payload=app.request('POST','/api/chat',body,headers)
@@ -267,7 +268,17 @@ class HandlerIntegrationTests(unittest.TestCase):
                 status,_,payload=app.request('POST','/api/chat/sessions/failed-run/resume',body,headers)
         result=json.loads(payload)
         self.assertEqual(status,200); self.assertEqual((result['resumed_from'],result['mode']),('failed-run','plan'))
-        call.assert_called_once_with([{'role':'user','content':'retry'}],'new-run',resumed_from='failed-run',mode='plan',owner_id='thor')
+        call.assert_called_once_with([{'role':'user','content':'retry'}],'new-run',resumed_from='failed-run',mode='plan',owner_id='thor',conversation_id='failed-run')
+
+    def test_completed_session_cannot_be_resumed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store=SessionStore(Path(directory)/'sessions.db'); now=1.0
+            snapshot={'run_id':'done-run','state':'completed','created_at':now,'updated_at':now,'iterations':1,'tool_calls':0,'error':None,'events':[]}
+            store.create_session(snapshot,[{'role':'user','content':'done'}]); store.complete_session(snapshot,'answer')
+            body=json.dumps({'run_id':'new-run'}).encode(); headers={'Authorization':basic(),'Content-Type':'application/json','Content-Length':str(len(body))}
+            with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),mock.patch.object(server,'session_store',store),RunningServer() as app:
+                status,_,payload=app.request('POST','/api/chat/sessions/done-run/resume',body,headers)
+        self.assertEqual(status,400); self.assertIn('only failed or cancelled',json.loads(payload)['error'])
 
     def test_static_path_traversal_returns_404(self):
         with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),RunningServer() as app:

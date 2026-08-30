@@ -75,7 +75,7 @@ The suite covers tool-call parsing, agent tool execution, authentication, reques
 
 The optional `mode` is `ask`, `plan`, or `agent` and defaults to `agent`. Ask mode answers without executing tools, Plan mode returns a plan without executing tools, and Agent mode uses the normal permission-controlled tool workflow. Run snapshots persist `run.mode`, `plan.created`, and `plan.step` events so clients can render live plan progress. Successful `git_diff`, `file_write`, and `file_patch` completion events include a bounded unified-diff preview, while `test_run` events include redacted command, exit-code, timing, stdout, and stderr previews for the workspace UI.
 
-Run state, messages, events, and tool results are persisted in SQLite. The default database is `data/sessions.db`; override it with `THOR_SESSION_DB`. At startup, interrupted sessions are marked failed with a restart reason so they can be inspected or resumed safely.
+Run state, messages, events, and tool results are persisted in SQLite. Follow-up messages remain in the selected conversation; a new stored conversation is created only after choosing `NEW SESSION`. The default database is `data/sessions.db`; override it with `THOR_SESSION_DB`. At startup, interrupted sessions are marked failed with a restart reason so they can be inspected or resumed safely.
 
 ```text
 GET  /api/chat/sessions?limit=50&offset=0

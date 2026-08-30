@@ -107,7 +107,7 @@ if os.environ.get('THOR_SCHEDULER_ENABLED','0')=='1': scheduler.start()
 
 def agent_chat(messages): return runtime.chat(messages)
 
-def agent_run_chat(messages,run_id=None,mode='agent',owner_id='thor'): return runtime.run_chat(messages,run_id,mode=mode,owner_id=owner_id)
+def agent_run_chat(messages,run_id=None,mode='agent',owner_id='thor',conversation_id=None): return runtime.run_chat(messages,run_id,mode=mode,owner_id=owner_id,conversation_id=conversation_id)
 
 def persisted_run_mode(session):
     for event in session.get('events',[]):
@@ -203,14 +203,14 @@ class Handler(SimpleHTTPRequestHandler):
             json_response(self,200,{'grants':permission_engine.grants(self.user_id)}); return
         if route == '/api/chat/sessions':
             query=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-            try: rows=session_store.list_sessions(query.get('limit',['50'])[0],query.get('offset',['0'])[0],self.user_id)
+            try: rows=session_store.list_conversations(query.get('limit',['50'])[0],query.get('offset',['0'])[0],self.user_id)
             except ValueError: self.send_error(400); return
             json_response(self,200,{'sessions':rows}); return
         if route.startswith('/api/chat/sessions/'):
             run_id=urllib.parse.unquote(route.rsplit('/',1)[-1])
             try: run_id=validate_run_id(run_id)
             except ValueError: self.send_error(400); return
-            session=session_store.get_session(run_id,self.user_id)
+            session=session_store.get_conversation(run_id,self.user_id)
             if session is None: self.send_error(404); return
             json_response(self,200,session); return
         if route.startswith('/api/chat/runs/'):
@@ -348,11 +348,14 @@ class Handler(SimpleHTTPRequestHandler):
             try:
                 run_id=validate_run_id(run_id); incoming=self.read_json_body(4096)
                 new_run_id=validate_run_id(incoming.get('run_id'))
-                session=session_store.get_session(run_id,self.user_id)
+                session=session_store.get_conversation(run_id,self.user_id)
                 if session is None: raise KeyError(run_id)
+                if session['state'] not in ('failed','cancelled'): raise ValueError('only failed or cancelled sessions can be resumed')
                 mode=persisted_run_mode(session)
-                messages=validate_messages(session_store.resumable_messages(run_id,self.user_id))
-                run,content,events,sources=runtime.run_chat(messages,new_run_id,resumed_from=run_id,mode=mode,owner_id=self.user_id)
+                messages=[{'role':item['role'],'content':item['content']} for item in session['messages'] if item['role'] in ('user','assistant')]
+                if messages and messages[-1]['role']=='assistant': messages.pop()
+                messages=validate_messages(messages)
+                run,content,events,sources=runtime.run_chat(messages,new_run_id,resumed_from=session['latest_run_id'],mode=mode,owner_id=self.user_id,conversation_id=run_id)
                 public_events=public_tool_events(events)
                 json_response(self,200,{'run_id':run.run_id,'resumed_from':run_id,'run_state':run.state.value,'mode':mode,'message':{'role':'assistant','content':content},'tools_used':public_events,'sources':sources,'done':True})
             except KeyError: self.send_error(404)
@@ -366,11 +369,13 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             incoming=self.read_json_body(2_000_000)
             requested_run_id=validate_run_id(incoming.get('run_id'))
+            conversation_id=validate_run_id(incoming.get('session_id') or requested_run_id)
+            if session_store.conversation_exists(conversation_id) and not session_store.conversation_exists(conversation_id,self.user_id): self.send_error(404); return
             messages=validate_messages(incoming.get('messages'))
             mode=validate_run_mode(incoming.get('mode'))
             if incoming.get('stream') is True:
-                self.stream_chat(messages,requested_run_id,mode); return
-            run,content,events,sources=agent_run_chat(messages,requested_run_id,mode,self.user_id)
+                self.stream_chat(messages,requested_run_id,mode,conversation_id); return
+            run,content,events,sources=agent_run_chat(messages,requested_run_id,mode,self.user_id,conversation_id)
             public_events=public_tool_events(events)
             body=(json.dumps({'run_id':run.run_id,'run_state':run.state.value,'mode':mode,'message':{'role':'assistant','content':content},'tools_used':public_events,'sources':sources,'done':True},ensure_ascii=False)+'\n').encode()
             self.send_response(200); self.send_header('Content-Type','application/x-ndjson; charset=utf-8'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
@@ -386,14 +391,14 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_chat_error(502,e.read().decode(errors='replace')[:1000])
         except Exception as e:
             self.send_chat_error(502,e)
-    def stream_chat(self,messages,run_id,mode='agent'):
+    def stream_chat(self,messages,run_id,mode='agent',conversation_id=None):
         self.send_response(200); self.send_header('Content-Type','application/x-ndjson; charset=utf-8')
         self.send_header('X-Accel-Buffering','no'); self.send_header('Connection','close'); self.end_headers()
         def send(value):
             self.wfile.write((json.dumps(value,ensure_ascii=False)+'\n').encode()); self.wfile.flush()
         try:
             send({'type':'start','run_id':run_id,'mode':mode})
-            run,content,events,sources=runtime.run_chat(messages,run_id,on_delta=lambda delta:send({'type':'delta','run_id':run_id,'message':{'role':'assistant','content':delta}}),mode=mode,owner_id=self.user_id)
+            run,content,events,sources=runtime.run_chat(messages,run_id,on_delta=lambda delta:send({'type':'delta','run_id':run_id,'message':{'role':'assistant','content':delta}}),mode=mode,owner_id=self.user_id,conversation_id=conversation_id)
             public_events=public_tool_events(events)
             send({'type':'final','run_id':run.run_id,'run_state':run.state.value,'mode':mode,'message':{'role':'assistant','content':''},'final_content':content,'tools_used':public_events,'sources':sources,'done':True})
         except Exception as exc:

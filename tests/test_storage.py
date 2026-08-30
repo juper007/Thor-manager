@@ -25,7 +25,7 @@ class StorageTests(unittest.TestCase):
 
     def test_migration_can_upgrade_rollback_and_upgrade_again(self):
         with self.store.connect() as db:
-            self.assertEqual(db.execute('SELECT MAX(version) FROM schema_migrations').fetchone()[0],6)
+            self.assertEqual(db.execute('SELECT MAX(version) FROM schema_migrations').fetchone()[0],7)
             self.assertIsNotNone(db.execute("SELECT name FROM sqlite_master WHERE name='sessions'").fetchone())
 
     def test_failed_migration_rolls_back_schema_and_version(self):
@@ -62,6 +62,37 @@ class StorageTests(unittest.TestCase):
         self.assertEqual([row['run_id'] for row in self.store.list_sessions(owner_id='alice')],['alice-run'])
         self.assertIsNotNone(self.store.get_session('alice-run','alice'))
         self.assertIsNone(self.store.get_session('alice-run','bob'))
+
+    def test_conversation_groups_multiple_runs_without_duplicate_history(self):
+        first={'run_id':'run-one','owner_id':'alice','state':'completed','created_at':1.0,'updated_at':1.0,'iterations':1,'tool_calls':0,'error':None,'events':[]}
+        self.store.create_session(first,[{'role':'user','content':'first'}],conversation_id='conversation-one'); self.store.complete_session(first,'answer one')
+        second={'run_id':'run-two','owner_id':'alice','state':'completed','created_at':2.0,'updated_at':2.0,'iterations':1,'tool_calls':0,'error':None,'events':[]}
+        history=[{'role':'user','content':'first'},{'role':'assistant','content':'answer one'},{'role':'user','content':'second'}]
+        self.store.create_session(second,history,conversation_id='conversation-one'); self.store.complete_session(second,'answer two')
+        conversations=self.store.list_conversations(owner_id='alice'); restored=self.store.get_conversation('conversation-one','alice')
+        self.assertEqual(len(conversations),1); self.assertEqual(conversations[0]['run_id'],'conversation-one')
+        self.assertEqual([item['content'] for item in restored['messages']],['first','answer one','second','answer two'])
+
+    def test_conversation_appends_complete_new_suffix_and_rejects_divergence(self):
+        first={'run_id':'first-run','owner_id':'alice','state':'completed','created_at':1.0,'updated_at':1.0,'iterations':1,'tool_calls':0,'error':None,'events':[]}
+        self.store.create_session(first,[{'role':'user','content':'one'}],conversation_id='shared'); self.store.complete_session(first,'first answer')
+        second={'run_id':'second-run','owner_id':'alice','state':'completed','created_at':2.0,'updated_at':2.0,'iterations':1,'tool_calls':0,'error':None,'events':[]}
+        messages=[{'role':'user','content':'one'},{'role':'assistant','content':'first answer'},{'role':'user','content':'two'},{'role':'user','content':'three'}]
+        self.store.create_session(second,messages,conversation_id='shared')
+        divergent={**second,'run_id':'divergent-run'}
+        with self.assertRaisesRegex(ValueError,'does not match'): self.store.create_session(divergent,[{'role':'user','content':'different'}],conversation_id='shared')
+        self.assertEqual([item['content'] for item in self.store.get_conversation('shared','alice')['messages']],['one','first answer','two','three'])
+
+    def test_cleanup_deletes_or_keeps_whole_conversations(self):
+        old=time.time()-10*86400
+        for conversation,second_updated in [('old',old+1),('recent',time.time())]:
+            first={'run_id':conversation+'-1','owner_id':'alice','state':'completed','created_at':old,'updated_at':old,'iterations':1,'tool_calls':0,'error':None,'events':[]}
+            self.store.create_session(first,[{'role':'user','content':conversation+'-1'}],conversation_id=conversation)
+            second={'run_id':conversation+'-2','owner_id':'alice','state':'completed','created_at':second_updated,'updated_at':second_updated,'iterations':1,'tool_calls':0,'error':None,'events':[]}
+            self.store.create_session(second,[{'role':'user','content':conversation+'-1'},{'role':'user','content':conversation+'-2'}],conversation_id=conversation)
+        self.assertEqual(self.store.cleanup(max_age_days=1,keep_recent=1),2)
+        self.assertIsNone(self.store.get_conversation('old','alice'))
+        self.assertEqual(len(self.store.get_conversation('recent','alice')['messages']),2)
 
     def test_users_are_stored_without_plaintext_passwords(self):
         self.assertTrue(self.store.save_user('alice','pbkdf2_sha256$1$salt$digest'))

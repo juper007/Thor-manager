@@ -38,11 +38,11 @@ $('allowApproval').onclick=()=>decideApproval('allow');$('denyApproval').onclick
 async function send(){
  const text=$('chatPrompt').value.trim();if(!text)return;$('chatPrompt').value='';$('sendChat').disabled=true;
  history.push({role:'user',content:text});bubble('user',text);
- const ai=bubble('ai','●'),runId='run-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);startRunMonitor(runId);
+ const ai=bubble('ai','●'),runId='run-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2),sessionId=selectedSessionId||'session-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);selectedSessionId=sessionId;startRunMonitor(runId);
  let full='',tools=[],sources=[],renderFrame=0,finalState='completed';
  const scheduleRender=()=>{if(renderFrame)return;renderFrame=requestAnimationFrame(()=>{renderFrame=0;ai.innerHTML=markdownToHtml(full);$('messages').scrollTop=1e9})};
  try{
-  const res=await fetch(API+'/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({run_id:runId,mode:activeRunMode,stream:true,model:$('chatModel').value,messages:history})});
+  const res=await fetch(API+'/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({run_id:runId,session_id:sessionId,mode:activeRunMode,stream:true,model:$('chatModel').value,messages:history})});
   if(!res.ok)throw Error((await res.text())||`HTTP ${res.status}`);
   const reader=res.body.getReader(),dec=new TextDecoder();let buf='',finalContent='';
   const consume=line=>{if(!line.trim())return;const j=JSON.parse(line);if(j.error)throw Error(j.error);tools=j.tools_used||tools;sources=j.sources||sources;if(j.type==='delta'&&j.message?.content){full+=j.message.content;scheduleRender()}if(j.type==='final'){finalContent=j.final_content||full;finalState=j.run_state||'completed'}};

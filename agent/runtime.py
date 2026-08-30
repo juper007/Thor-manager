@@ -129,11 +129,11 @@ class AgentRuntime:
         _,answer,events,sources=self.run_chat(messages)
         return answer,events,sources
 
-    def run_chat(self,messages,run_id=None,resumed_from=None,on_delta=None,mode='agent',owner_id='thor'):
+    def run_chat(self,messages,run_id=None,resumed_from=None,on_delta=None,mode='agent',owner_id='thor',conversation_id=None):
         mode=validate_run_mode(mode)
         run=self.create_run(run_id,owner_id)
         if self.session_store is not None:
-            self.session_store.create_session(run.snapshot(),messages,resumed_from=resumed_from)
+            self.session_store.create_session(run.snapshot(),messages,resumed_from=resumed_from,conversation_id=conversation_id)
             run._on_change=lambda snapshot: None if snapshot['state']==RunState.COMPLETED.value else self.session_store.save_snapshot(snapshot)
         if not self.gate.acquire(blocking=False):
             self._terminate(run,RunState.FAILED,'AI service is busy')
