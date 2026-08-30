@@ -98,6 +98,13 @@ class ToolRegistryTests(unittest.TestCase):
         for name in agent_tools.DEFAULT_REGISTRY.names():
             self.assertIn(f'- {name} ',agent_tools.TOOL_GUIDE)
 
+    def test_prompt_catalog_can_be_limited_to_active_policy(self):
+        prompt=agent_tools.DEFAULT_REGISTRY.prompt_catalog({'file_read','git_status'})
+        self.assertIn('- file_read ',prompt)
+        self.assertIn('- git_status ',prompt)
+        self.assertNotIn('- file_write ',prompt)
+        self.assertNotIn('- git_commit ',prompt)
+
 
 if __name__=='__main__':
     unittest.main()

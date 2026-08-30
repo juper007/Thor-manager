@@ -3,6 +3,7 @@ import json
 import re
 from pathlib import Path
 
+from agent.skills import SkillCatalog
 from tools.builtin import build_registry
 from tools.web import public_url as _public_url
 from tools.web import request as _request
@@ -66,10 +67,10 @@ def execute_tool(call):
     return DEFAULT_REGISTRY.execute(call.get('name',''),call.get('arguments',{}))
 
 
-def load_skill_instructions(root):
-    parts=[]
-    for path in sorted((Path(root)/'skills').glob('*/SKILL.md')):
-        try:
-            text=path.read_text(encoding='utf-8'); body=text.split('---',2)[-1].strip(); parts.append(f'[{path.parent.name}]\n{body}')
-        except OSError: pass
-    return TOOL_GUIDE+'\n\nInstalled skill guidance:\n'+'\n\n'.join(parts)
+def load_skill_instructions(root,request=None):
+    known_tools={item['name']:item['risk_level'] for item in DEFAULT_REGISTRY.model_catalog()}
+    catalog=SkillCatalog.discover(root,known_tools)
+    guidance=catalog.render(request)
+    from agent.skills import SkillPrompt
+    tool_guide=TOOL_GUIDE_PREFIX+DEFAULT_REGISTRY.prompt_catalog(guidance.allowed_tools)+'\n'+TOOL_GUIDE_SUFFIX
+    return SkillPrompt(tool_guide+'\n\nActive skill guidance:\n'+guidance,guidance.allowed_tools)

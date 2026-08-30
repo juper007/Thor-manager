@@ -58,9 +58,11 @@ class ToolRegistry:
             'risk_level':spec.risk_level.value,
         } for spec in self._tools.values()]
 
-    def prompt_catalog(self):
+    def prompt_catalog(self,allowed_names=None):
+        allowed=None if allowed_names is None else set(allowed_names)
         lines=[]
         for spec in self._tools.values():
+            if allowed is not None and spec.name not in allowed: continue
             properties=spec.input_schema.get('properties',{})
             args=', '.join(f'{name}:{item.get("type","any")}' for name,item in properties.items()) or 'no arguments'
             lines.append(f'- {spec.name} ({args}): {spec.description}')

@@ -1,3 +1,4 @@
+import inspect
 import json
 import queue
 import re
@@ -82,6 +83,13 @@ class AgentRuntime:
         self.session_store=session_store; self.permission_engine=permission_engine; self.stream_model_call=stream_model_call
         self.gate=threading.BoundedSemaphore(max(1,concurrency))
         self._runs=OrderedDict(); self._runs_lock=threading.Lock()
+
+    def _load_skill_instructions(self,messages):
+        try:
+            parameters=inspect.signature(self.skill_loader).parameters.values()
+            accepts_request=any(item.kind==inspect.Parameter.VAR_POSITIONAL for item in parameters) or len([item for item in parameters if item.kind in (inspect.Parameter.POSITIONAL_ONLY,inspect.Parameter.POSITIONAL_OR_KEYWORD)])>=2
+        except (TypeError,ValueError): accepts_request=False
+        return self.skill_loader(self.root,messages) if accepts_request else self.skill_loader(self.root)
 
     def create_run(self,run_id=None):
         run_id=validate_run_id(run_id)
@@ -228,7 +236,8 @@ class AgentRuntime:
             'plan':'Return a concise numbered execution plan only. Do not call tools or perform the work.',
             'agent':'Use the available tools when they are needed to complete the request.',
         }[mode]
-        conversation=[{'role':'system','content':self.skill_loader(self.root)+'\n\nRUN MODE: '+mode.upper()+'. '+mode_instruction},*messages]
+        skill_guidance=self._load_skill_instructions(messages); allowed_tools=getattr(skill_guidance,'allowed_tools',None)
+        conversation=[{'role':'system','content':skill_guidance+'\n\nRUN MODE: '+mode.upper()+'. '+mode_instruction},*messages]
         events=[]; sources=[]; answer=''; tool_cache={}
         step_titles={
             'ask':['요청 분석','직접 답변 작성','답변 검증'],
@@ -264,15 +273,21 @@ class AgentRuntime:
                     event=tool_cache[cache_key]; duplicate_count+=1; run.emit('tool.reused',{'name':call['name']})
                 else:
                     run.increment_tool_calls(); run.emit('tool.started',{'name':call['name'],'arguments':call['arguments']})
-                    permission=None; spec=self.registry.get(call['name']) if self.permission_engine is not None and hasattr(self.registry,'get') else None
-                    if spec is not None:
-                        permission=self.permission_engine.authorize(run,spec,call['arguments'],run.is_cancelled,
-                            max(.01,self.total_timeout-(time.monotonic()-started)),release_capacity,reacquire_capacity)
-                    self._check_active(run,started)
-                    if permission is not None and not permission['allowed']:
+                    permission=None; known_spec=self.registry.get(call['name']) if hasattr(self.registry,'get') else None
+                    blocked_by_skill=known_spec is not None and allowed_tools is not None and call['name'] not in allowed_tools
+                    spec=known_spec if self.permission_engine is not None else None
+                    if blocked_by_skill:
                         event={'name':call['name'],'arguments':call['arguments'],'status':'error','result':None,
-                            'error':permission['error'],'error_code':permission['error_code'],'seconds':0,'truncated':False}
-                    else: event=self.registry.execute(call['name'],call['arguments'])
+                            'error':f'{call["name"]} is not allowed by the active skill','error_code':'skill_tool_not_allowed','seconds':0,'truncated':False}
+                    else:
+                        if spec is not None:
+                            permission=self.permission_engine.authorize(run,spec,call['arguments'],run.is_cancelled,
+                                max(.01,self.total_timeout-(time.monotonic()-started)),release_capacity,reacquire_capacity)
+                        self._check_active(run,started)
+                        if permission is not None and not permission['allowed']:
+                            event={'name':call['name'],'arguments':call['arguments'],'status':'error','result':None,
+                                'error':permission['error'],'error_code':permission['error_code'],'seconds':0,'truncated':False}
+                        else: event=self.registry.execute(call['name'],call['arguments'])
                     tool_cache[cache_key]=event; events.append(event)
                     if self.session_store is not None: self.session_store.record_tool_execution(run.run_id,len(events),event)
                     run.emit('tool.completed',tool_completion_payload(call,event))

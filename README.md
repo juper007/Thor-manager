@@ -108,3 +108,5 @@ tests/             regression and architecture contracts
 ```
 
 `agent_tools.py` remains a compatibility entrypoint while `tools/registry.py` owns registration, JSON Schema validation, standardized error codes, risk metadata, timeouts, timing, and incremental output limits. Registered schemas are immutable copies. `AgentRuntime` receives the Registry and parsing dependencies through its constructor rather than importing the compatibility facade. It tracks bounded recent runs through explicit states and structured events, with cancellation and iteration, tool-call, and wall-clock limits.
+
+Skills are discovered from direct child `skills/*/SKILL.md` files. Every skill declares JSON-list frontmatter fields for `allowed-tools`, `triggers`, `preflight`, `postflight`, `completion`, and `failure`, plus a `max-risk` value (`read`, `safe_write`, `elevated`, or `destructive`). The catalog rejects malformed metadata, unknown tools, symlink escapes, duplicate names, and tools above the declared risk ceiling. Matching skills are selected from the latest user request, rendered into the system prompt, and their tool allowlist is enforced by the runtime.
