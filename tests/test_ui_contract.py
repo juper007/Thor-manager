@@ -47,6 +47,22 @@ class UIContractTests(unittest.TestCase):
         self.assertIn('state-completed',self.agent_css)
         self.assertIn('state-failed',self.agent_css)
         self.assertIn('state-cancelled',self.agent_css)
+        self.assertGreater(self.agent_css.index('.run-panel.state-failed'),self.agent_css.index('.run-panel.terminal .run-dot'))
+        self.assertGreater(self.agent_css.index('.run-panel.state-cancelled'),self.agent_css.index('.run-panel.terminal .run-dot'))
+        self.assertIn('function clearSession',self.script)
+        self.assertIn("$('clearChat').disabled=true",self.script)
+        self.assertIn("$('planPanel').hidden=true",self.script)
+        self.assertIn("$('runTools').innerHTML=''",self.script)
+
+    def test_agent_modes_and_plan_panel_contract(self):
+        for marker in ('data-run-mode="ask"','data-run-mode="plan"','data-run-mode="agent"','id="planPanel"','id="planSteps"'):
+            with self.subTest(marker=marker): self.assertIn(marker,self.page)
+        self.assertIn('mode:activeRunMode',self.script)
+        self.assertIn('function renderRunPlan',self.script)
+        self.assertIn("await stopRunMonitor(finalState)",self.script)
+        self.assertIn("fetch(API+'/api/chat/runs/'",self.script)
+        self.assertIn("event.type==='plan.created'",self.script)
+        self.assertIn("event.type==='plan.step'",self.script)
 
     def test_agent_approval_dialog_contract(self):
         for marker in ('id="approvalModal"','id="approvalScope"','id="allowApproval"','id="denyApproval"'):

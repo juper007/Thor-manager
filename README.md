@@ -60,6 +60,8 @@ The suite covers tool-call parsing, agent tool execution, authentication, reques
 
 `POST /api/chat` accepts an optional `run_id` containing 1–64 letters, numbers, underscores, or hyphens. Clients that need cancellation should generate and send the ID before starting the request. Send `"stream":true` to receive newline-delimited `start`, `delta`, and `final` events while the model generates. The UI renders Markdown incrementally from `delta` content; the `final` event carries authoritative `final_content`, tool results, sources, and `run_state` without repeating the answer as another displayed message. Runs can be inspected with `GET /api/chat/runs/{run_id}` and cancelled with `POST /api/chat/cancel` using `{"run_id":"..."}`.
 
+The optional `mode` is `ask`, `plan`, or `agent` and defaults to `agent`. Ask mode answers without executing tools, Plan mode returns a plan without executing tools, and Agent mode uses the normal permission-controlled tool workflow. Run snapshots persist `run.mode`, `plan.created`, and `plan.step` events so clients can render live plan progress.
+
 Run state, messages, events, and tool results are persisted in SQLite. The default database is `data/sessions.db`; override it with `THOR_SESSION_DB`. At startup, interrupted sessions are marked failed with a restart reason so they can be inspected or resumed safely.
 
 ```text

@@ -2,7 +2,7 @@ import threading
 import time
 import unittest
 
-from agent.runtime import AgentRuntime,RunCancelled,RunLimitError,RunTimeout,ServiceBusy,validate_run_id
+from agent.runtime import AgentRuntime,RunCancelled,RunLimitError,RunTimeout,ServiceBusy,validate_run_id,validate_run_mode
 from agent.state import AgentRun,RunState
 
 
@@ -35,6 +35,21 @@ class AgentStateTests(unittest.TestCase):
         self.assertEqual((answer,events),('answer',[])); self.assertEqual(run.state,RunState.COMPLETED)
         types=[event['type'] for event in run.snapshot()['events']]
         self.assertIn('model.started',types); self.assertIn('run.completed',types)
+
+    def test_run_modes_emit_plan_progress_and_block_tools_outside_agent(self):
+        for index,mode in enumerate(('ask','plan')):
+            with self.subTest(mode=mode):
+                runtime=make_runtime(['tool:x','direct response'])
+                run,answer,events,_=runtime.run_chat([{'role':'user','content':'hello'}],f'mode-{index}',mode=mode)
+                self.assertEqual(answer,'direct response'); self.assertEqual(events,[]); self.assertEqual(runtime.registry.calls,[])
+                snapshot=run.snapshot(); types=[event['type'] for event in snapshot['events']]
+                self.assertIn('run.mode',types); self.assertIn('plan.created',types)
+                plan=[event for event in snapshot['events'] if event['type']=='plan.step']
+                self.assertEqual([(event['payload']['position'],event['payload']['status']) for event in plan][-2:],[(3,'in_progress'),(3,'completed')])
+
+    def test_invalid_run_mode_is_rejected(self):
+        with self.assertRaises(ValueError): validate_run_mode('unsafe')
+        self.assertEqual(validate_run_mode(None),'agent')
 
     def test_tool_run_records_execution_and_prevents_duplicate(self):
         runtime=make_runtime(['tool:x','tool:x','final'])
@@ -77,6 +92,8 @@ class AgentStateTests(unittest.TestCase):
         runtime.model_call=lambda _:time.sleep(1)
         with self.assertRaises(RunTimeout): runtime.run_chat([{'role':'user','content':'go'}],'timeout')
         self.assertEqual(runtime.get_run('timeout').state,RunState.FAILED)
+        failed=[event for event in runtime.get_run('timeout').snapshot()['events'] if event['type']=='plan.step' and event['payload']['status']=='failed']
+        self.assertTrue(failed)
 
     def test_cancellation_stops_waiting_for_model(self):
         started=threading.Event(); release=threading.Event(); caught=[]

@@ -4,7 +4,7 @@ from collections import deque
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from agent import models
-from agent.runtime import AgentRuntime,RunCancelled,RunLimitError,ServiceBusy,validate_messages,validate_run_id
+from agent.runtime import AgentRuntime,RunCancelled,RunLimitError,ServiceBusy,validate_messages,validate_run_id,validate_run_mode
 from agent.permissions import PermissionEngine
 from storage import SessionStore
 import agent_tools
@@ -64,7 +64,12 @@ runtime=AgentRuntime(
 
 def agent_chat(messages): return runtime.chat(messages)
 
-def agent_run_chat(messages,run_id=None): return runtime.run_chat(messages,run_id)
+def agent_run_chat(messages,run_id=None,mode='agent'): return runtime.run_chat(messages,run_id,mode=mode)
+
+def persisted_run_mode(session):
+    for event in session.get('events',[]):
+        if event.get('type')=='run.mode': return validate_run_mode(event.get('payload',{}).get('mode'))
+    return 'agent'
 
 def json_response(handler,status,value):
     body=json.dumps(value,ensure_ascii=False).encode()
@@ -244,10 +249,13 @@ class Handler(SimpleHTTPRequestHandler):
             try:
                 run_id=validate_run_id(run_id); incoming=self.read_json_body(4096)
                 new_run_id=validate_run_id(incoming.get('run_id'))
+                session=session_store.get_session(run_id)
+                if session is None: raise KeyError(run_id)
+                mode=persisted_run_mode(session)
                 messages=validate_messages(session_store.resumable_messages(run_id))
-                run,content,events,sources=runtime.run_chat(messages,new_run_id,resumed_from=run_id)
+                run,content,events,sources=runtime.run_chat(messages,new_run_id,resumed_from=run_id,mode=mode)
                 public_events=[{'name':e['name'],'arguments':e['arguments'],'seconds':e['seconds'],'error':e['error']} for e in events]
-                json_response(self,200,{'run_id':run.run_id,'resumed_from':run_id,'run_state':run.state.value,'message':{'role':'assistant','content':content},'tools_used':public_events,'sources':sources,'done':True})
+                json_response(self,200,{'run_id':run.run_id,'resumed_from':run_id,'run_state':run.state.value,'mode':mode,'message':{'role':'assistant','content':content},'tools_used':public_events,'sources':sources,'done':True})
             except KeyError: self.send_error(404)
             except ValueError as e: json_response(self,400,{'error':str(e),'done':True})
             except ServiceBusy as e: json_response(self,429,{'error':str(e),'done':True})
@@ -260,11 +268,12 @@ class Handler(SimpleHTTPRequestHandler):
             incoming=self.read_json_body(2_000_000)
             requested_run_id=validate_run_id(incoming.get('run_id'))
             messages=validate_messages(incoming.get('messages'))
+            mode=validate_run_mode(incoming.get('mode'))
             if incoming.get('stream') is True:
-                self.stream_chat(messages,requested_run_id); return
-            run,content,events,sources=agent_run_chat(messages,requested_run_id)
+                self.stream_chat(messages,requested_run_id,mode); return
+            run,content,events,sources=agent_run_chat(messages,requested_run_id,mode)
             public_events=[{'name':e['name'],'arguments':e['arguments'],'seconds':e['seconds'],'error':e['error']} for e in events]
-            body=(json.dumps({'run_id':run.run_id,'run_state':run.state.value,'message':{'role':'assistant','content':content},'tools_used':public_events,'sources':sources,'done':True},ensure_ascii=False)+'\n').encode()
+            body=(json.dumps({'run_id':run.run_id,'run_state':run.state.value,'mode':mode,'message':{'role':'assistant','content':content},'tools_used':public_events,'sources':sources,'done':True},ensure_ascii=False)+'\n').encode()
             self.send_response(200); self.send_header('Content-Type','application/x-ndjson; charset=utf-8'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
         except ValueError as e:
             body=json.dumps({'error':str(e),'done':True}).encode(); self.send_response(400); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body)
@@ -278,16 +287,16 @@ class Handler(SimpleHTTPRequestHandler):
             detail=e.read().decode(errors='replace')[:1000]; body=json.dumps({'error':detail,'done':True}).encode(); self.send_response(502); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body)
         except Exception as e:
             body=json.dumps({'error':str(e),'done':True}).encode(); self.send_response(502); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(body)
-    def stream_chat(self,messages,run_id):
+    def stream_chat(self,messages,run_id,mode='agent'):
         self.send_response(200); self.send_header('Content-Type','application/x-ndjson; charset=utf-8')
         self.send_header('X-Accel-Buffering','no'); self.send_header('Connection','close'); self.end_headers()
         def send(value):
             self.wfile.write((json.dumps(value,ensure_ascii=False)+'\n').encode()); self.wfile.flush()
         try:
-            send({'type':'start','run_id':run_id})
-            run,content,events,sources=runtime.run_chat(messages,run_id,on_delta=lambda delta:send({'type':'delta','run_id':run_id,'message':{'role':'assistant','content':delta}}))
+            send({'type':'start','run_id':run_id,'mode':mode})
+            run,content,events,sources=runtime.run_chat(messages,run_id,on_delta=lambda delta:send({'type':'delta','run_id':run_id,'message':{'role':'assistant','content':delta}}),mode=mode)
             public_events=[{'name':e['name'],'arguments':e['arguments'],'seconds':e['seconds'],'error':e['error']} for e in events]
-            send({'type':'final','run_id':run.run_id,'run_state':run.state.value,'message':{'role':'assistant','content':''},'final_content':content,'tools_used':public_events,'sources':sources,'done':True})
+            send({'type':'final','run_id':run.run_id,'run_state':run.state.value,'mode':mode,'message':{'role':'assistant','content':''},'final_content':content,'tools_used':public_events,'sources':sources,'done':True})
         except Exception as exc:
             try: send({'type':'error','run_id':run_id,'error':str(exc),'done':True})
             except (BrokenPipeError,ConnectionResetError): pass

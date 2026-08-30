@@ -16,12 +16,19 @@ class RunTimeout(RunLimitError): pass
 
 
 RUN_ID_RE=re.compile(r'^[A-Za-z0-9_-]{1,64}$')
+RUN_MODES={'ask','plan','agent'}
 
 
 def validate_run_id(value):
     if value is None: return uuid.uuid4().hex
     if not isinstance(value,str) or not RUN_ID_RE.fullmatch(value):
         raise ValueError('run_id must contain 1 to 64 letters, numbers, underscores, or hyphens')
+    return value
+
+
+def validate_run_mode(value):
+    value='agent' if value is None else value
+    if value not in RUN_MODES: raise ValueError('mode must be ask, plan, or agent')
     return value
 
 
@@ -85,7 +92,8 @@ class AgentRuntime:
         _,answer,events,sources=self.run_chat(messages)
         return answer,events,sources
 
-    def run_chat(self,messages,run_id=None,resumed_from=None,on_delta=None):
+    def run_chat(self,messages,run_id=None,resumed_from=None,on_delta=None,mode='agent'):
+        mode=validate_run_mode(mode)
         run=self.create_run(run_id)
         if self.session_store is not None:
             self.session_store.create_session(run.snapshot(),messages,resumed_from=resumed_from)
@@ -104,12 +112,14 @@ class AgentRuntime:
                 if remaining<=0: raise RunTimeout(f'run exceeded {self.total_timeout} second limit')
                 if self.gate.acquire(timeout=min(.1,remaining)): capacity_held[0]=True
         try:
-            answer,events,sources=self._run(run,messages,started,release_capacity,reacquire_capacity,on_delta)
+            answer,events,sources=self._run(run,messages,started,release_capacity,reacquire_capacity,on_delta,mode)
             if self.session_store is not None: self.session_store.complete_session(run.snapshot(),answer)
             return run,answer,events,sources
         except RunCancelled as exc:
+            self._terminate_plan(run,'cancelled')
             self._terminate(run,RunState.CANCELLED,str(exc)); raise
         except Exception as exc:
+            self._terminate_plan(run,'failed')
             self._terminate(run,RunState.FAILED,str(exc)); raise
         finally:
             if self.permission_engine is not None: self.permission_engine.finish_run(run.run_id)
@@ -125,6 +135,14 @@ class AgentRuntime:
     def _terminate(self,run,state,error):
         if run.is_terminal(): return
         run.set_error(error); run.transition(state,error); run.emit('run.'+state.value,{'error':error})
+
+    def _terminate_plan(self,run,status):
+        active=None
+        for event in run.snapshot().get('events',[]):
+            if event['type']=='plan.step':
+                if event['payload'].get('status')=='in_progress': active=event['payload'].get('position')
+                elif event['payload'].get('position')==active: active=None
+        if active is not None: run.emit('plan.step',{'position':active,'status':status})
 
     def _check_active(self,run,started):
         if run.is_cancelled(): raise RunCancelled('run cancelled by user')
@@ -179,15 +197,35 @@ class AgentRuntime:
             raise RunLimitError(f'{phase} produced another tool call')
         return answer
 
-    def _run(self,run,messages,started,release_capacity=lambda:None,reacquire_capacity=lambda:None,on_delta=None):
-        conversation=[{'role':'system','content':self.skill_loader(self.root)},*messages]
+    def _run(self,run,messages,started,release_capacity=lambda:None,reacquire_capacity=lambda:None,on_delta=None,mode='agent'):
+        mode_instruction={
+            'ask':'Answer the user directly without calling or suggesting any tool calls.',
+            'plan':'Return a concise numbered execution plan only. Do not call tools or perform the work.',
+            'agent':'Use the available tools when they are needed to complete the request.',
+        }[mode]
+        conversation=[{'role':'system','content':self.skill_loader(self.root)+'\n\nRUN MODE: '+mode.upper()+'. '+mode_instruction},*messages]
         events=[]; sources=[]; answer=''; tool_cache={}
+        step_titles={
+            'ask':['요청 분석','직접 답변 작성','답변 검증'],
+            'plan':['요청 분석','실행 계획 작성','계획 검증'],
+            'agent':['요청 분석','도구 실행 및 결과 관찰','결과 검증'],
+        }[mode]
+        run.emit('run.mode',{'mode':mode})
+        run.emit('plan.created',{'mode':mode,'steps':[{'position':index+1,'title':title,'status':'pending'} for index,title in enumerate(step_titles)]})
+        run.emit('plan.step',{'position':1,'status':'in_progress'})
         run.transition(RunState.PLANNING)
+        run.emit('plan.step',{'position':1,'status':'completed'})
+        run.emit('plan.step',{'position':2,'status':'in_progress'})
         for iteration in range(1,self.max_iterations+1):
             self._check_active(run,started); run.set_iterations(iteration)
             answer=self._call_model(run,conversation,started,on_delta=on_delta)
             calls=self.parse_calls(answer)
             if not calls: break
+            if mode!='agent':
+                conversation.append({'role':'assistant','content':answer})
+                conversation.append({'role':'user','content':'Tool calls are disabled in '+mode+' mode. Respond without tools and follow the requested mode.'})
+                answer=self._require_final_answer(self._call_model(run,conversation,started,mode+'_recovery',on_delta),mode+' recovery')
+                break
             new_call_count=sum(json.dumps(call,ensure_ascii=False,sort_keys=True) not in tool_cache for call in calls)
             if run.tool_calls+new_call_count>self.max_tool_calls:
                 raise RunLimitError(f'run exceeded {self.max_tool_calls} tool call limit')
@@ -229,6 +267,8 @@ class AgentRuntime:
             conversation.append({'role':'user','content':'Tool limit reached. Answer now using the available results without another tool call.'})
             answer=self._require_final_answer(self._call_model(run,conversation,started,'limit_recovery',on_delta),'iteration-limit recovery')
         self._check_active(run,started)
+        run.emit('plan.step',{'position':2,'status':'completed'})
+        run.emit('plan.step',{'position':3,'status':'in_progress'})
         if run.transition_if_active(RunState.VERIFYING) is None: raise RunCancelled('run cancelled by user')
         unique=[]; seen=set()
         for source in sources:
@@ -236,5 +276,6 @@ class AgentRuntime:
             if url and url not in seen: seen.add(url); unique.append(source)
         clean=self.strip_tool_calls(answer); final=clean or '도구 실행 결과를 바탕으로 답변을 만들지 못했습니다.'
         if run.transition_if_active(RunState.COMPLETED) is None: raise RunCancelled('run cancelled by user')
+        run.emit('plan.step',{'position':3,'status':'completed'})
         run.emit('run.completed',{'answer_characters':len(final),'tools_executed':len(events)})
         return final,events,unique[:8]
