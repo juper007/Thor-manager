@@ -1,1 +1,2 @@
 .auth-logout{border:1px solid var(--line);background:transparent;color:var(--muted);padding:7px 9px;font:700 9px monospace;cursor:pointer}.auth-logout:hover{border-color:var(--green);color:var(--text)}
+.auth-admin{color:inherit;text-decoration:none;font-size:.75rem;letter-spacing:.08em;border:1px solid currentColor;padding:.45rem .65rem;border-radius:.35rem}

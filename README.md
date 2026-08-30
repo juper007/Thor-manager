@@ -55,6 +55,8 @@ sudo systemctl restart thor-monitor.service
 
 `THOR_MONITOR_PASSWORD` remains the password for the built-in `thor` account. Add users with `THOR_MONITOR_USERS_JSON`; each username receives an isolated chat-session history. Browser login uses an HttpOnly, SameSite cookie signed by `THOR_AUTH_SECRET`. Set `THOR_AUTH_COOKIE_SECURE=1` only when the site is served over HTTPS. Basic authentication remains available for API clients using any configured username and password.
 
+The built-in `thor` account is an administrator. Open `/admin` while signed in as `thor` to create users, reset passwords, or delete database-managed accounts. Managed passwords require at least 12 characters and are stored as salted PBKDF2-SHA256 hashes in SQLite. Changing an environment-backed account password from this page creates a hashed database override; remove its plaintext entry from `THOR_MONITOR_USERS_JSON` after confirming the new login. Environment-backed accounts cannot be deleted in the UI.
+
 Copy `qwen-image/qwen-image.env.example` to `qwen-image/qwen-image.env` and replace the placeholder before starting the image service. Environment files and generated model artifacts are intentionally excluded from Git.
 
 ## Tests

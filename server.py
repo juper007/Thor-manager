@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json, os, re, subprocess, threading, time, urllib.request, urllib.error, urllib.parse, uuid
+import json, logging, os, re, subprocess, threading, time, urllib.request, urllib.error, urllib.parse, uuid
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from agent import models
@@ -37,7 +37,26 @@ permission_engine=PermissionEngine(session_store,positive_int_env('THOR_APPROVAL
 mcp_manager=MCPConnectionManager(session_store)
 mcp_tools.configure(mcp_manager)
 notification_service=NotificationService(session_store)
-authenticator=Authenticator()
+authenticator=Authenticator(lambda: session_store)
+
+
+class LoginRateLimiter:
+    def __init__(self,max_failures=5,window_seconds=60):
+        self.max_failures=max(1,int(max_failures)); self.window_seconds=max(1,int(window_seconds)); self._failures={}; self._lock=threading.Lock()
+    def retry_after(self,address,now=None):
+        now=time.time() if now is None else float(now)
+        with self._lock:
+            attempts=[value for value in self._failures.get(address,[]) if value>now-self.window_seconds]
+            if attempts: self._failures[address]=attempts
+            else: self._failures.pop(address,None)
+            return max(1,int(attempts[0]+self.window_seconds-now)+1) if len(attempts)>=self.max_failures else 0
+    def fail(self,address,now=None):
+        now=time.time() if now is None else float(now)
+        with self._lock:
+            attempts=[value for value in self._failures.get(address,[]) if value>now-self.window_seconds]
+            attempts.append(now); self._failures[address]=attempts
+            return max(1,int(attempts[0]+self.window_seconds-now)+1) if len(attempts)>=self.max_failures else 0
+login_limiter=LoginRateLimiter(positive_int_env('THOR_AUTH_MAX_FAILURES',5),positive_int_env('THOR_AUTH_WINDOW_SECONDS',60))
 
 def image_api_key():
     key = os.environ.get('THOR_IMAGE_API_KEY', '')
@@ -132,7 +151,10 @@ class Handler(SimpleHTTPRequestHandler):
         if route == '/login':
             body=(ROOT/'login.html').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body); return
         if not self.authenticated(): return
-        if route == '/api/auth/me': json_response(self,200,{'username':self.user_id}); return
+        if route == '/api/auth/me': json_response(self,200,{'username':self.user_id,'is_admin':authenticator.is_admin(self.user_id)}); return
+        if route == '/api/admin/users':
+            if not authenticator.is_admin(self.user_id): self.send_error(403); return
+            json_response(self,200,{'users':authenticator.list_accounts()}); return
         if route == '/api/stats':
             with lock: body = json.dumps({**state, "history": list(history)}).encode()
             self.send_response(200); self.send_header('Content-Type','application/json'); self.send_header('Cache-Control','no-store'); self.end_headers(); self.wfile.write(body); return
@@ -205,20 +227,46 @@ class Handler(SimpleHTTPRequestHandler):
         if route == '/ai':
             html=(ROOT/'ai-workspace.html').read_text(encoding='utf-8')
             body=html.encode(); self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if route == '/admin':
+            if not authenticator.is_admin(self.user_id): self.send_error(403); return
+            body=(ROOT/'admin.html').read_bytes(); self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body); return
         elif route == '/': self.path = '/index.html'
         return super().do_GET()
     def do_POST(self):
         route=self.path.split('?',1)[0]
         if route == '/api/auth/login':
             try:
+                address=self.client_address[0]; retry_after=login_limiter.retry_after(address)
+                if retry_after: self.send_json(429,{'error':'too many login attempts'},Retry_After=retry_after); return
                 incoming=self.read_json_body(4096); username=incoming.get('username',''); password=incoming.get('password','')
-                if not authenticator.verify(username,password): self.send_json(401,{'error':'invalid username or password'}); return
+                if not authenticator.verify(username,password):
+                    retry_after=login_limiter.fail(address); logging.warning('authentication failed from %s',address)
+                    if retry_after: self.send_json(429,{'error':'too many login attempts'},Retry_After=retry_after)
+                    else: self.send_json(401,{'error':'invalid username or password'})
+                    return
                 token=authenticator.issue(username); self.send_json(200,{'username':username},Set_Cookie=authenticator.cookie(token))
             except ValueError as exc: self.send_json(503,{'error':str(exc)})
             return
         if route == '/api/auth/logout':
             self.send_json(200,{'logged_out':True},Set_Cookie=authenticator.clear_cookie()); return
         if not self.authenticated(): return
+        if route == '/api/admin/users':
+            if not authenticator.is_admin(self.user_id): self.send_error(403); return
+            try:
+                incoming=self.read_json_body(4096); username=incoming.get('username','')
+                authenticator.create_user(username,incoming.get('password',''),incoming.get('is_admin',False))
+                self.send_json(201,{'created':True,'username':username})
+            except ValueError as exc: self.send_json(400,{'error':str(exc)})
+            return
+        if route.startswith('/api/admin/users/') and route.endswith('/password'):
+            if not authenticator.is_admin(self.user_id): self.send_error(403); return
+            username=urllib.parse.unquote(route.split('/')[-2])
+            try:
+                incoming=self.read_json_body(4096); authenticator.change_password(username,incoming.get('password',''))
+                self.send_json(200,{'updated':True,'username':username})
+            except ValueError as exc: self.send_json(400,{'error':str(exc)})
+            except KeyError: self.send_error(404)
+            return
         if route == '/api/advanced/mcp':
             try:
                 incoming=self.read_json_body(64_000); name=incoming.get('name','')
@@ -354,6 +402,14 @@ class Handler(SimpleHTTPRequestHandler):
     def do_DELETE(self):
         if not self.authenticated(): return
         route=self.path.split('?',1)[0]
+        if route.startswith('/api/admin/users/'):
+            if not authenticator.is_admin(self.user_id): self.send_error(403); return
+            username=urllib.parse.unquote(route.rsplit('/',1)[-1])
+            if username==self.user_id: self.send_json(409,{'error':'cannot delete the current user'}); return
+            try: authenticator.delete_user(username); self.send_json(200,{'deleted':True,'username':username})
+            except ValueError as exc: self.send_json(409,{'error':str(exc)})
+            except KeyError: self.send_error(404)
+            return
         if route.startswith('/api/advanced/mcp/'):
             name=urllib.parse.unquote(route.rsplit('/',1)[-1]); mcp_manager.disconnect(name)
             if not session_store.delete_mcp_server(name): self.send_error(404)

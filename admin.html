@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Thor 사용자 관리</title><link rel="stylesheet" href="/admin.css"></head>
+<body><main><header><div><p>THOR MONITOR</p><h1>사용자 관리</h1></div><a href="/ai">워크스페이스로 돌아가기</a></header>
+<section class="panel"><h2>사용자 추가</h2><form id="createUser"><label>아이디<input id="username" required pattern="[A-Za-z0-9_.-]{1,64}" autocomplete="off"></label><label>비밀번호<input id="password" type="password" required minlength="12" autocomplete="new-password"></label><label class="check"><input id="isAdmin" type="checkbox">관리자 권한</label><button>추가</button></form><p id="message" role="status"></p></section>
+<section class="panel"><h2>등록된 사용자</h2><div id="users">불러오는 중…</div></section></main>
+<dialog id="passwordDialog"><form id="passwordForm"><h2>비밀번호 변경</h2><p id="passwordTarget"></p><label>새 비밀번호<input id="newPassword" type="password" required minlength="12" autocomplete="new-password"></label><div class="dialog-actions"><button type="button" id="cancelPassword">취소</button><button>변경</button></div></form></dialog>
+<script src="/admin.js"></script></body></html>

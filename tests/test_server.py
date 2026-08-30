@@ -37,6 +37,42 @@ def basic(password='test-password',username='thor'):
 
 
 class HandlerIntegrationTests(unittest.TestCase):
+    def test_admin_can_manage_hashed_users_and_regular_user_cannot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store=SessionStore(Path(directory)/'sessions.db')
+            create=json.dumps({'username':'alice','password':'correct-horse','is_admin':False}).encode()
+            json_headers={'Content-Type':'application/json','Content-Length':str(len(create)),'Authorization':basic()}
+            with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),mock.patch.object(server,'session_store',store),RunningServer() as app:
+                create_status,_,_=app.request('POST','/api/admin/users',create,json_headers)
+                login_body=json.dumps({'username':'alice','password':'correct-horse'}).encode()
+                login_status,_,_=app.request('POST','/api/auth/login',login_body,{'Content-Type':'application/json','Content-Length':str(len(login_body))})
+                forbidden,_,_=app.request('GET','/api/admin/users',headers={'Authorization':basic('correct-horse','alice')})
+                list_status,_,list_body=app.request('GET','/api/admin/users',headers={'Authorization':basic()})
+            self.assertEqual((create_status,login_status,forbidden,list_status),(201,200,403,200))
+            self.assertEqual(store.get_user('alice')['password_hash'].split('$')[0],'pbkdf2_sha256')
+            self.assertNotIn('correct-horse',str(store.get_user('alice')))
+            self.assertNotIn('password_hash',json.loads(list_body)['users'][0])
+
+    def test_admin_user_validation_and_self_delete_protection(self):
+        weak=json.dumps({'username':'alice','password':'short'}).encode()
+        headers={'Content-Type':'application/json','Content-Length':str(len(weak)),'Authorization':basic()}
+        with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),RunningServer() as app:
+            weak_status,_,_=app.request('POST','/api/admin/users',weak,headers)
+            delete_status,_,_=app.request('DELETE','/api/admin/users/thor',headers={'Authorization':basic()})
+        self.assertEqual((weak_status,delete_status),(400,409))
+
+    def test_password_change_invalidates_existing_cookie(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store=SessionStore(Path(directory)/'sessions.db')
+            with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),mock.patch.object(server,'session_store',store),RunningServer() as app:
+                create=json.dumps({'username':'alice','password':'first-password'}).encode(); admin={'Authorization':basic(),'Content-Type':'application/json','Content-Length':str(len(create))}
+                app.request('POST','/api/admin/users',create,admin)
+                login=json.dumps({'username':'alice','password':'first-password'}).encode(); status,headers,_=app.request('POST','/api/auth/login',login,{'Content-Type':'application/json','Content-Length':str(len(login))}); cookie=headers['Set-Cookie'].split(';',1)[0]
+                change=json.dumps({'password':'second-password'}).encode(); change_headers={'Authorization':basic(),'Content-Type':'application/json','Content-Length':str(len(change))}
+                changed,_,_=app.request('POST','/api/admin/users/alice/password',change,change_headers)
+                stale,_,_=app.request('GET','/api/auth/me',headers={'Cookie':cookie})
+            self.assertEqual((status,changed,stale),(200,200,401))
+
     def test_missing_password_fails_closed(self):
         with mock.patch.dict(os.environ,{},clear=True),RunningServer() as app:
             status,_,_=app.request('GET','/api/stats')
@@ -47,6 +83,17 @@ class HandlerIntegrationTests(unittest.TestCase):
             status,headers,_=app.request('GET','/api/stats',headers={'Authorization':basic('wrong')})
         self.assertEqual(status,401)
         self.assertIn('Basic',headers.get('WWW-Authenticate',''))
+
+    def test_login_rate_limit_blocks_repeated_failures(self):
+        limiter=server.LoginRateLimiter(max_failures=2,window_seconds=60)
+        body=json.dumps({'username':'thor','password':'wrong'}).encode(); headers={'Content-Type':'application/json','Content-Length':str(len(body))}
+        with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),mock.patch.object(server,'login_limiter',limiter),RunningServer() as app:
+            first,_,_=app.request('POST','/api/auth/login',body,headers)
+            valid=json.dumps({'username':'thor','password':'test-password'}).encode(); valid_headers={'Content-Type':'application/json','Content-Length':str(len(valid))}
+            success,_,_=app.request('POST','/api/auth/login',valid,valid_headers)
+            second,second_headers,_=app.request('POST','/api/auth/login',body,headers)
+            blocked,_,_=app.request('POST','/api/auth/login',body,headers)
+        self.assertEqual((first,success,second,blocked),(401,200,429,429)); self.assertIn('Retry-After',second_headers)
 
     def test_authenticated_stats_request_succeeds(self):
         with mock.patch.dict(os.environ,{'THOR_MONITOR_PASSWORD':'test-password'},clear=True),RunningServer() as app:

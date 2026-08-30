@@ -25,7 +25,7 @@ class StorageTests(unittest.TestCase):
 
     def test_migration_can_upgrade_rollback_and_upgrade_again(self):
         with self.store.connect() as db:
-            self.assertEqual(db.execute('SELECT MAX(version) FROM schema_migrations').fetchone()[0],5)
+            self.assertEqual(db.execute('SELECT MAX(version) FROM schema_migrations').fetchone()[0],6)
             self.assertIsNotNone(db.execute("SELECT name FROM sqlite_master WHERE name='sessions'").fetchone())
 
     def test_failed_migration_rolls_back_schema_and_version(self):
@@ -62,6 +62,16 @@ class StorageTests(unittest.TestCase):
         self.assertEqual([row['run_id'] for row in self.store.list_sessions(owner_id='alice')],['alice-run'])
         self.assertIsNotNone(self.store.get_session('alice-run','alice'))
         self.assertIsNone(self.store.get_session('alice-run','bob'))
+
+    def test_users_are_stored_without_plaintext_passwords(self):
+        self.assertTrue(self.store.save_user('alice','pbkdf2_sha256$1$salt$digest'))
+        self.assertFalse(self.store.save_user('alice','another-hash'))
+        user=self.store.get_user('alice')
+        self.assertEqual(user['username'],'alice'); self.assertFalse(user['is_admin'])
+        self.assertNotIn('password',self.store.list_users()[0])
+        self.assertTrue(self.store.update_user_password('alice','replacement-hash'))
+        self.assertEqual(self.store.get_user('alice')['password_hash'],'replacement-hash')
+        self.assertTrue(self.store.delete_user('alice'))
 
     def test_interrupted_run_is_recovered_and_can_supply_resume_messages(self):
         snapshot={'run_id':'interrupted','state':'planning','created_at':time.time(),'updated_at':time.time(),'iterations':1,'tool_calls':0,'error':None,'events':[]}

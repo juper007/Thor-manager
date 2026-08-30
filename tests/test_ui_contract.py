@@ -12,6 +12,13 @@ class UIContractTests(unittest.TestCase):
         cls.page=(ROOT/'ai-workspace.html').read_text(encoding='utf-8')
         cls.agent_css=(ROOT/'ai-agent.css').read_text(encoding='utf-8')
         cls.accessibility_css=(ROOT/'ai-accessibility.css').read_text(encoding='utf-8')
+        cls.admin_page=(ROOT/'admin.html').read_text(encoding='utf-8')
+        cls.admin_script=(ROOT/'admin.js').read_text(encoding='utf-8')
+
+    def test_admin_password_input_is_masked(self):
+        self.assertIn('id="passwordDialog"',self.admin_page)
+        self.assertIn('id="newPassword" type="password"',self.admin_page)
+        self.assertNotIn('prompt(',self.admin_script)
 
     def test_markdown_renderer_contract(self):
         required=(

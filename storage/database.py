@@ -205,6 +205,28 @@ class SessionStore:
             cursor=db.execute(sql,params)
             return cursor.rowcount
 
+    def list_users(self):
+        with self.connect() as db:
+            return [dict(row) for row in db.execute('SELECT username,is_admin,created_at,updated_at FROM users ORDER BY username')]
+
+    def get_user(self,username):
+        with self.connect() as db: row=db.execute('SELECT * FROM users WHERE username=?',(username,)).fetchone()
+        return dict(row) if row else None
+
+    def save_user(self,username,password_hash,is_admin=False):
+        now=time.time()
+        with self.connect() as db:
+            cursor=db.execute('INSERT INTO users(username,password_hash,is_admin,created_at,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(username) DO NOTHING',
+                (username,password_hash,int(bool(is_admin)),now,now))
+            return cursor.rowcount==1
+
+    def update_user_password(self,username,password_hash):
+        with self.connect() as db:
+            return db.execute('UPDATE users SET password_hash=?,updated_at=? WHERE username=?',(password_hash,time.time(),username)).rowcount==1
+
+    def delete_user(self,username):
+        with self.connect() as db: return db.execute('DELETE FROM users WHERE username=?',(username,)).rowcount==1
+
     def upsert_mcp_server(self,name,command,cwd=None,env=None,enabled=True):
         now=time.time()
         with self.connect() as db:
