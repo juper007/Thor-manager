@@ -102,6 +102,15 @@ class AgentStateTests(unittest.TestCase):
         self.assertEqual([name for name,_ in runtime.registry.calls],['test_run','file_patch','test_run'])
         self.assertEqual(len(events),3)
 
+    def test_successful_mutation_invalidates_cached_reads(self):
+        runtime=make_runtime(['read','patch','read','done'])
+        runtime.parse_calls=lambda text: ([{'name':'file_read','arguments':{'path':'app.py'}}] if text=='read'
+                                          else [{'name':'file_patch','arguments':{'path':'app.py'}}] if text=='patch' else [])
+        run,answer,events,_=runtime.run_chat([{'role':'user','content':'read edit read'}],'fresh-read')
+        self.assertEqual(answer,'done'); self.assertEqual(run.tool_calls,3)
+        self.assertEqual([name for name,_ in runtime.registry.calls],['file_read','file_patch','file_read'])
+        self.assertEqual(len(events),3)
+
     def test_default_iteration_budget_allows_fix_test_retry_and_diff(self):
         replies=['tool:open','tool:read','tool:patch','tool:test-failed','tool:repatch','tool:test-passed','tool:diff','done']
         runtime=make_runtime(replies)

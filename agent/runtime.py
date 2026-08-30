@@ -21,6 +21,7 @@ class RunTimeout(RunLimitError): pass
 RUN_ID_RE=re.compile(r'^[A-Za-z0-9_-]{1,64}$')
 RUN_MODES={'ask','plan','agent'}
 DIFF_TOOLS={'git_diff','file_write','file_patch'}
+MUTATING_TOOLS={'file_write','file_patch','shell_execute','git_stage','git_commit'}
 MAX_EVENT_DIFF_CHARS=50_000
 MAX_EVENT_STDOUT_CHARS=20_000
 MAX_EVENT_STDERR_CHARS=10_000
@@ -306,6 +307,7 @@ class AgentRuntime:
                 else:
                     run.increment_tool_calls(); run.emit('tool.started',{'name':call['name'],'arguments':call['arguments']})
                     event=self._execute_tool_call(run,call,allowed_tools,started,release_capacity,reacquire_capacity)
+                    if call['name'] in MUTATING_TOOLS and event.get('status')=='success': tool_cache.clear()
                     if cacheable: tool_cache[cache_key]=event
                     events.append(event)
                     if self.session_store is not None: self.session_store.record_tool_execution(run.run_id,len(events),event)
