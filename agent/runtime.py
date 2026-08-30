@@ -300,12 +300,14 @@ class AgentRuntime:
             for call in calls:
                 self._check_active(run,started)
                 cache_key=json.dumps(call,ensure_ascii=False,sort_keys=True)
-                if cache_key in tool_cache:
+                cacheable=call['name']!='test_run'
+                if cacheable and cache_key in tool_cache:
                     event=tool_cache[cache_key]; duplicate_count+=1; run.emit('tool.reused',{'name':call['name']})
                 else:
                     run.increment_tool_calls(); run.emit('tool.started',{'name':call['name'],'arguments':call['arguments']})
                     event=self._execute_tool_call(run,call,allowed_tools,started,release_capacity,reacquire_capacity)
-                    tool_cache[cache_key]=event; events.append(event)
+                    if cacheable: tool_cache[cache_key]=event
+                    events.append(event)
                     if self.session_store is not None: self.session_store.record_tool_execution(run.run_id,len(events),event)
                     run.emit('tool.completed',tool_completion_payload(call,event))
                 results.append(event)

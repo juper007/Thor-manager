@@ -93,6 +93,15 @@ class AgentStateTests(unittest.TestCase):
         self.assertEqual(answer,'done'); self.assertEqual(run.tool_calls,2)
         self.assertEqual([event['arguments']['value'] for event in events],['a','b'])
 
+    def test_identical_test_run_is_reexecuted_after_a_patch(self):
+        runtime=make_runtime(['test','patch','test','done'])
+        runtime.parse_calls=lambda text: ([{'name':'test_run','arguments':{'command':'python check.py'}}] if text=='test'
+                                          else [{'name':'file_patch','arguments':{'path':'app.py'}}] if text=='patch' else [])
+        run,answer,events,_=runtime.run_chat([{'role':'user','content':'test and fix'}],'test-retry')
+        self.assertEqual(answer,'done'); self.assertEqual(run.tool_calls,3)
+        self.assertEqual([name for name,_ in runtime.registry.calls],['test_run','file_patch','test_run'])
+        self.assertEqual(len(events),3)
+
     def test_default_iteration_budget_allows_fix_test_retry_and_diff(self):
         replies=['tool:open','tool:read','tool:patch','tool:test-failed','tool:repatch','tool:test-passed','tool:diff','done']
         runtime=make_runtime(replies)
